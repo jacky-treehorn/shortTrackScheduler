@@ -7,7 +7,7 @@ Dies ist eine temporäre Skriptdatei.
 from random import Random
 import copy
 import pandas as pd
-from pointsAllocator import allocatePoints, randomPenaltyAdvancementMaker
+from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
             
 if __name__ == "__main__":
@@ -19,24 +19,28 @@ if __name__ == "__main__":
                                minHeatSize=3
                                )
     heatDict = raceProgram_.buildHeats(adjustAfterNAttempts = 1000)
+    pa = pointsAllocation(raceProgram_.skaterDict,
+                          verbose = True,
+                          ratingMaximum = 100.0)
     resultGenerator = Random()
 
     for heatId, heat in heatDict.items():
         heat_ = copy.copy(heat['heat'])
         resultGenerator.shuffle(heat_)
+        heat_ = dict(zip(heat_, list(range(1, 1+len(heat_)))))
         heat_ = randomPenaltyAdvancementMaker(heat_, resultGenerator)
         print('\n')
         print('Heat {0} result: {1}'.format(heatId, heat_))
-        allocatePoints(heat_, raceProgram_.skaterDict, verbose = True)
+        pa.allocatePoints(heat_)
     for skater_ in raceProgram_.skaterDict.values():
         skater_.averageResults()
     dfList = []
     for skater_ in raceProgram_.skaterDict.values():
         dfList.append({'skaterNum':skater_.skaterNum,
-                        'averagePoints':skater_.averageResult,
-                        'skaterName':skater_.name,
-                        'skaterTeam':skater_.team})
+                       'rating':skater_.averageResult,
+                       'skaterName':skater_.name,
+                       'skaterTeam':skater_.team})
     ranking = pd.DataFrame(dfList)
     print('\n')
     print('Rankings')
-    print(ranking.sort_values(by=['averagePoints'], ascending = False))
+    print(ranking.sort_values(by=['rating'], ascending = False))

@@ -20,12 +20,16 @@ class skater():
         self.totalAppearances = 0
         self.totalEncounters = 0
         self.totalUniqueEncounters = 0
+        self.cumulativeEncounters = 0
         self.points = 0
         self.averageResult = 0
+        self.rating = 0
         self.seed = seed
         self.team = team
         self.ageCategory = ageCategory
         self.name = name
+        self._startPositionValues = []
+        self._startLanes = []
     
     def addEncounter(self, otherSkaterNum : int):
         if otherSkaterNum != self.skaterNum and not(otherSkaterNum in self.encounters):
@@ -65,4 +69,12 @@ class skater():
         if self.totalEncounters != 0:
             self.averageResult = self.points / self.totalEncounters
         else:
-            self.averageResult = 0
+            self.averageResult = 0.0
+    
+    def updateRunningAverageResult(self, n_encounters: int):
+        self.cumulativeEncounters += n_encounters
+        if self.cumulativeEncounters != 0:
+            self.rating = self.points / self.cumulativeEncounters
+        else:
+            self.rating = 0.0
+        
