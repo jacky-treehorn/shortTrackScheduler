@@ -23,11 +23,28 @@ class raceProgram():
                  minHeatSize: int = 2,
                  considerSeeding : bool = False,
                  fairStartLanes : bool = False,
-                 participantNames : list = []
+                 participantNames : list = [],
+                 participantTeams : dict = {},
+                 participantAgeGroup : dict = {},
+                 participantSeeding : dict = {}
                  ):
         self.participantNames = participantNames
-        if len(self.participantNames) != 0:
+        if len(self.participantNames) > 0:
             assert len(self.participantNames) == totalSkaters, 'Length of participant names does not match the number of skaters!'
+            assert len(self.participantNames) == len(set(self.participantNames)), 'Possible duplicate in participant names.'
+        self.participantTeams = participantTeams
+        if len(self.participantTeams) > 0:
+            for key in self.participantTeams.keys():
+                assert key in self.participantNames.keys(), '{} in participantTeams not found in participantNames'.format(key)
+        self.participantAgeGroup = participantAgeGroup
+        if len(self.participantAgeGroup) > 0:
+            for key in self.participantAgeGroup.keys():
+                assert key in self.participantNames.keys(), '{} in participantAgeGroup not found in participantNames'.format(key)
+        self.participantSeeding = participantSeeding
+        if len(self.participantSeeding) > 0:
+            for key in self.participantSeeding.keys():
+                assert key in self.participantNames.keys(),  '{} in participantSeeding not found in participantNames'.format(key)
+            assert set(self.participantSeeding.values()) == set(list(range(1, totalSkaters + 1))), 'Seeding should only contain sequential numbers from {0} to {1}'.format(1, totalSkaters)
         self.heats = []
         self.totalSkaters = totalSkaters
         self.numRacesPerSkater = numRacesPerSkater
@@ -69,9 +86,21 @@ class raceProgram():
             skaterName = 'Person_'+str(i_skater)
             if i_skater < len(self.participantNames):
                 skaterName = self.participantNames[i_skater]
+            seed = i_skater + 1
+            if skaterName in self.participantSeeding.keys():
+                seed = self.participantSeeding[skaterName]
+            team = None
+            if skaterName in self.participantTeams.keys():
+                seed = self.participantTeams[skaterName]
+            ageCategory = None
+            if skaterName in self.participantAgeGroup.keys():
+                ageCategory = self.participantAgeGroup[skaterName]
+            
             self.skaterDict[i_skater] = skater(i_skater, 
-                                               seed = i_skater + 1,
-                                               name = skaterName)
+                                               seed = seed,
+                                               name = skaterName,
+                                               team = team,
+                                               ageCategory = ageCategory)
         heatDict = {}
         n_attempts = 1
         n_encounterErrors = 0
