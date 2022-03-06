@@ -14,7 +14,8 @@ class pointsAllocation(object):
                  ratingMaximum: float = 100.0,
                  verbose: bool = False,
                  pointsScheme: str = 'linear',
-                 nonFinishPlacings: list = ['a', 'p', 'dns', 'dnf']):
+                 nonFinishPlacings: list = ['a', 'p', 'dns', 'dnf'],
+                 noTimePlacings: list = ['p', 'dns', 'dnf']):
         self.ratingMaximum = ratingMaximum
         self.skatersDict = skatersDict
         self.verbose = verbose
@@ -24,6 +25,7 @@ class pointsAllocation(object):
         if pointsScheme == 'fibonacci':
             self.pointsGenerator = lambda pos: 34.0 if pos <= 1 else 21.0 if pos == 2 else max(0.0, self.pointsGenerator(pos - 2) - self.pointsGenerator(pos - 1))
         self.nonFinishPlacings = nonFinishPlacings
+        self.noTimePlacings = noTimePlacings
         self.standardPlacings = lambda heatSize: list(range(1, heatSize+1))
         self.possiblePlacingGenerator = lambda heatSize: self.standardPlacings(heatSize) + self.nonFinishPlacings
         self.defaultPointsGenerator = lambda heatSize: dict(zip(self.standardPlacings(heatSize), [self.pointsGenerator(heatSize, x) for x in self.standardPlacings(heatSize)]))
@@ -103,7 +105,14 @@ class pointsAllocation(object):
         return points
 
     def allocatePoints(self,
-                       heatResult: dict):
+                       heatResult: dict,
+                       heatTimes: dict,
+                       heatNum: int):
+        for skaterNum, result in heatResult.items():
+            self.skatersDict[skaterNum].addHeatTime(heatNum)
+            if skaterNum in heatTimes.keys():
+                self.skatersDict[skaterNum].addHeatTime(heatNum, heatTimes[skaterNum])
+                    
         self._checkPlausiblePlacings(heatResult)
         defaultPoints = self._getDefaultPoints(heatResult)
         n_encounters = max(0, len(heatResult) - 1)

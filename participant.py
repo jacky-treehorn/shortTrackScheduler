@@ -4,7 +4,7 @@ Created on Tue Feb 22 20:21:28 2022
 
 @author: rasta
 """
-
+import numpy as np
 
 class skater():
     
@@ -30,6 +30,8 @@ class skater():
         self.name = name
         self._startPositionValues = []
         self._startLanes = []
+        self.heatTimes = {}
+        self.bestTime = float(np.iinfo(int).max)
     
     def addEncounter(self, otherSkaterNum : int):
         if otherSkaterNum != self.skaterNum and not(otherSkaterNum in self.encounters):
@@ -81,4 +83,17 @@ class skater():
             self.rating = self.points / self.cumulativeEncounters
         else:
             self.rating = 0.0
+    
+    def addHeatTime(self, heatNum: int, time: float = -1.0):
+        self.heatTimes[heatNum] = time
+    
+    def calculateBestTime(self):
+        for val in self.heatTimes.values():
+            if val <= 0.0:
+                continue
+            if val < self.bestTime:
+                self.bestTime = val
+            
+
+        
         
