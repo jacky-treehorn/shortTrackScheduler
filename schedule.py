@@ -8,11 +8,7 @@ import numpy as np
 from participant import skater
 from random import Random
 import copy
-
-class heat():
-    
-    def __init__(self):
-        pass
+import pandas as pd
         
 class raceProgram():
     
@@ -69,6 +65,22 @@ class raceProgram():
         self.heatOrder = []
         self.heatDict = {}
         self.startLaneStddev = 0.0
+        self.resultsTable = None
+    
+    def buildResultsTable(self):
+        dfList = []
+        for skater_ in self.skaterDict.values():
+            dfList.append({'skaterNum':skater_.skaterNum,
+                           'rating':skater_.averageResult,
+                           'bestTime':skater_.bestTime,
+                           'skaterName':skater_.name,
+                           'skaterTeam':skater_.team})
+        ranking = pd.DataFrame(dfList)
+        print('\n')
+        print('Rankings')
+        self.resultsTable = ranking.sort_values(by=['rating', 'bestTime'], ascending = [False, True])
+        print(self.resultsTable)
+        return self.resultsTable
     
     def buildHeats(self, 
                    max_attempts: int = 10000,

@@ -6,7 +6,6 @@ Dies ist eine temporäre Skriptdatei.
 """
 from random import Random
 import copy
-import pandas as pd
 from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
             
@@ -34,7 +33,7 @@ if __name__ == "__main__":
             if result in pa.noTimePlacings:
                 continue
             else:
-                if result.lower() == 'a':
+                if result in ['a', 'A']:
                     heatTimes[key] = float(2) + 40.0   
                 else:
                     heatTimes[key] = float(result) + 40.0
@@ -44,14 +43,4 @@ if __name__ == "__main__":
     for skater_ in raceProgram_.skaterDict.values():
         skater_.averageResults()
         skater_.calculateBestTime()
-    dfList = []
-    for skater_ in raceProgram_.skaterDict.values():
-        dfList.append({'skaterNum':skater_.skaterNum,
-                       'rating':skater_.averageResult,
-                       'bestTime':skater_.bestTime,
-                       'skaterName':skater_.name,
-                       'skaterTeam':skater_.team})
-    ranking = pd.DataFrame(dfList)
-    print('\n')
-    print('Rankings')
-    print(ranking.sort_values(by=['rating', 'bestTime'], ascending = [False, True]))
+    resultsTable = raceProgram_.buildResultsTable()
