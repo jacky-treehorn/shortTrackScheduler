@@ -28,9 +28,10 @@ class raceProgram():
                  participantAgeGroup : dict = {},
                  participantSeeding : dict = {}
                  ):
+        self.totalSkaters = totalSkaters
         self.participantNames = participantNames
         if len(self.participantNames) > 0:
-            assert len(self.participantNames) == totalSkaters, 'Length of participant names does not match the number of skaters!'
+            assert len(self.participantNames) == self.totalSkaters, 'Length of participant names does not match the number of skaters!'
             assert len(self.participantNames) == len(set(self.participantNames)), 'Possible duplicate in participant names.'
         self.participantTeams = participantTeams
         if len(self.participantTeams) > 0:
@@ -42,18 +43,19 @@ class raceProgram():
                 assert key in self.participantNames.keys(), '{} in participantAgeGroup not found in participantNames'.format(key)
         self.participantSeeding = participantSeeding
         if len(self.participantSeeding) > 0:
+            assert len(self.participantSeeding) == self.totalSkaters, 'Length of participant seeding does not match the number of skaters!'
             for key in self.participantSeeding.keys():
                 assert key in self.participantNames.keys(),  '{} in participantSeeding not found in participantNames'.format(key)
             assert set(self.participantSeeding.values()) == set(list(range(1, totalSkaters + 1))), 'Seeding should only contain sequential numbers from {0} to {1}'.format(1, totalSkaters)
         self.heats = []
-        self.totalSkaters = totalSkaters
         self.numRacesPerSkater = numRacesPerSkater
+        assert self.numRacesPerSkater >= 0, 'numRaces must be greater than or equal to 0.'
         self.heatSize = heatSize
         assert self.heatSize > 1, 'Heat size must be at least 2.'
         self.considerSeeding = considerSeeding
         self.fairStartLanes = fairStartLanes
         self.minHeatSize = minHeatSize
-        assert self.minHeatSize >= 1, 'Minimum heat size must be at least 1.'
+        assert self.minHeatSize > 1, 'Minimum heat size must be at least 2.'
         assert self.heatSize >= self.minHeatSize, 'Heat size must be at least {}.'.format(self.minHeatSize)
         self.skaterDict = {}
         self.randomizer = Random()
@@ -75,10 +77,8 @@ class raceProgram():
                    verbose: bool = False) -> dict:
         adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
         if self.numRacesPerSkater == 0:
-            while self.totalSkaters / 2**self.numRacesPerSkater > 4:
+            while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
                 self.numRacesPerSkater += 1
-        else:
-            assert self.numRacesPerSkater > 0, 'numRaces must be greater than 0.'
         skaterNums = list(range(self.totalSkaters))
         averageSeeding = float(self.totalSkaters + 1) / 2.0  
         sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)   
@@ -91,7 +91,7 @@ class raceProgram():
                 seed = self.participantSeeding[skaterName]
             team = None
             if skaterName in self.participantTeams.keys():
-                seed = self.participantTeams[skaterName]
+                team = self.participantTeams[skaterName]
             ageCategory = None
             if skaterName in self.participantAgeGroup.keys():
                 ageCategory = self.participantAgeGroup[skaterName]
@@ -191,8 +191,9 @@ class raceProgram():
             for heatNum in heatsToDelete:
                 del heatDict[heatNum]
             if not all([len(heat_['heat']) >= self.minHeatSize for heat_ in heatDict.values()]):
-                print('\n')
-                print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(n_attempts))
+                if verbose:
+                    print('\n')
+                    print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(n_attempts))
                 self.reorganizeHeats(heatDict)
             if all([skater_.totalAppearances == self.numRacesPerSkater for skater_ in self.skaterDict.values()]):
                 allEncounters = [x.totalEncounters for x in self.skaterDict.values()]
@@ -206,7 +207,6 @@ class raceProgram():
                     n_encounterErrors += 1
                     if verbose:
                         print('encountersError: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(n_attempts))
-                    n_attempts += 1
                     self.reorganizeHeats(heatDict)
                     continue
                 seedingErrors = False
@@ -216,7 +216,8 @@ class raceProgram():
                             seedingErrors = True
                 if seedingErrors:
                     n_seedingErrors += 1
-                    print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(n_attempts))
+                    if verbose:
+                        print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(n_attempts))
                     self.reorganizeHeats(heatDict)
                     continue   
                 if self.fairStartLanes:
@@ -233,28 +234,30 @@ class raceProgram():
             print('\n')
             print('WARNING! Some skaters may have noticably fewer encounters than others.')
             print('\n')
+        heatSpacing = self.spaceHeatsOut(heatDict)
+        if len(heatSpacing) > 0:
+            print('\n')
+            print('Optimal heat order: ', heatSpacing)
+            print('Heats will be renumbered...')
+            self.heatOrder = [x for x in heatSpacing if type(x) == int]
+            heatDict_ = {}
+            for skater_ in self.skaterDict.values():
+                skater_.removeAllHeatAppearances()
+            for i, heat in enumerate(self.heatOrder):
+                heatDict_[i+1] = heatDict[heat]
+                for skaterNum in heatDict[heat]['heat']:
+                    self.skaterDict[skaterNum].addHeatAppearance(i+1)
+            heatDict = heatDict_   
+        self.heatDict = heatDict
         for heatNum, heat in heatDict.items():
             if self.considerSeeding:
                 print('Heat {0}: '.format(heatNum), heat['heat'], ' Seeding Check: {0}'.format(np.abs(heat['averageSeeding'] - averageSeeding) < sampleStdDev))
             else:
-                print('Heat {0}: '.format(heatNum), heat['heat'])
-        heatSpacing = self.spaceHeatsOut(heatDict)
-        if len(heatSpacing) > 0:
-            print('\n')
-            print('Heats should be run in the following order: ', heatSpacing)
-            self.heatOrder = [x for x in heatSpacing if type(x) == int]
-            heatDict_ = {}
-            for skater_ in self.skaterDict.values():
-                skater_.heatAppearances = []
-            for i, heat in enumerate(self.heatOrder):
-                heatDict_[i] = heatDict[heat]
-                for skaterNum in heatDict[heat]['heat']:
-                    self.skaterDict[skaterNum].addHeatAppearance(i)
-            heatDict = heatDict_   
-        self.heatDict = heatDict
-        for skaterNum, skater_ in self.skaterDict.items():
+                print('Heat {0}: '.format(heatNum), heat['heat'])        
+        for skater_ in self.skaterDict.values():
             print('Skater {0} appears in {1} heats: '.format(skater_.skaterNum, skater_.totalAppearances), skater_.heatAppearances, ', Total encounters: {0}, Total unique encounters: {1}'.format(skater_.totalEncounters, skater_.totalUniqueEncounters))       
-            
+            for heatNum_ in skater_.heatAppearances:
+                assert skater_.skaterNum in self.heatDict[heatNum_]['heat'], 'heatAllocationError: Skater {0} is not in the allocated heat: {1}'.format(skater_.skaterNum, self.heatDict[heatNum_]['heat'])
         return heatDict
 
     def reorganizeHeats(self, heatDict: dict):
@@ -396,7 +399,6 @@ class raceProgram():
                 if skater_ in uniqueSkaters:
                     continue
                 uniqueSkaters.append(skater_)
-        self.randomizer.shuffle(heatNums)
         concludedHeats = []
         concludedHeats_ = []
         n_attempts = -1

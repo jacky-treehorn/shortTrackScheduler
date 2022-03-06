@@ -65,6 +65,10 @@ class skater():
             self.heatAppearances.remove(heatNum)
         self.totalAppearances = len(self.heatAppearances)
 
+    def removeAllHeatAppearances(self):
+        self.heatAppearances = []
+        self.totalAppearances = len(self.heatAppearances)
+
     def averageResults(self):
         if self.totalEncounters != 0:
             self.averageResult = self.points / self.totalEncounters
