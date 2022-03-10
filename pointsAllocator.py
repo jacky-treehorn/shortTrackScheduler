@@ -4,11 +4,14 @@ Created on Tue Feb 22 20:19:34 2022
 
 @author: rasta
 """
+# pylint: disable=invalid-name
 import copy
 from random import Random
 
-class pointsAllocation(object):
-    
+
+class pointsAllocation():
+    """ Allocates points to a skater after receiving heat results """
+
     def __init__(self,
                  skatersDict: dict,
                  ratingMaximum: float = 100.0,
@@ -19,34 +22,42 @@ class pointsAllocation(object):
         self.ratingMaximum = ratingMaximum
         self.skatersDict = skatersDict
         self.verbose = verbose
-        self.pointsGenerator = lambda heatSize, pos: 0.0
+        self.pointsGenerator = lambda pos, heatSize=0: 0.0
         if pointsScheme == 'linear':
-            self.pointsGenerator = lambda heatSize, pos: (heatSize - pos)*self.ratingMaximum if pos <= heatSize else 0.0
+            self.pointsGenerator = lambda pos, heatSize=4: (
+                heatSize - pos)*self.ratingMaximum if pos <= heatSize else 0.0
         if pointsScheme == 'fibonacci':
-            self.pointsGenerator = lambda pos: 34.0 if pos <= 1 else 21.0 if pos == 2 else max(0.0, self.pointsGenerator(pos - 2) - self.pointsGenerator(pos - 1))
+            self.pointsGenerator = lambda pos, heatSize=0: 34.0 if pos <= 1 else 21.0 if pos == 2 else max(
+                0.0, self.pointsGenerator(pos - 2) - self.pointsGenerator(pos - 1))
         self.nonFinishPlacings = nonFinishPlacings
         self.noTimePlacings = noTimePlacings
         self.standardPlacings = lambda heatSize: list(range(1, heatSize+1))
-        self.possiblePlacingGenerator = lambda heatSize: self.standardPlacings(heatSize) + self.nonFinishPlacings
-        self.defaultPointsGenerator = lambda heatSize: dict(zip(self.standardPlacings(heatSize), [self.pointsGenerator(heatSize, x) for x in self.standardPlacings(heatSize)]))
-            
-    def _checkPlausiblePlacings(self, 
+        self.possiblePlacingGenerator = lambda heatSize: self.standardPlacings(
+            heatSize) + self.nonFinishPlacings
+        self.defaultPointsGenerator = lambda heatSize: dict(zip(self.standardPlacings(
+            heatSize), [self.pointsGenerator(x, heatSize) for x in self.standardPlacings(heatSize)]))
+
+    def _checkPlausiblePlacings(self,
                                 heatResult: dict):
         heatSize = len(heatResult)
         placings = self.standardPlacings(heatSize)
         possiblePlacings = self.possiblePlacingGenerator(heatSize)
         for result in heatResult.values():
-            assert result in possiblePlacings, 'Impossible placement: {0}, only placements {1} are allowed for this heat.'.format(result, possiblePlacings)
+            assert result in possiblePlacings, \
+                'Impossible placement: {0}, only placements {1} are allowed for this heat.'.format(
+                    result, possiblePlacings)
         skipPlacing = []
         for placement in placings:
             if len(skipPlacing) > 0:
                 for skipPlace in skipPlacing:
-                    assert not (skipPlace in heatResult.values()), 'Error in heat result, place {} may not exist in a result with a dead heat.'.format(skipPlace)
+                    assert not (skipPlace in heatResult.values()), \
+                        'Error in heat result, place {} may not exist in a result with a dead heat.'.format(
+                            skipPlace)
                 if placement in skipPlacing:
-                    continue 
+                    continue
             n_sharedPlacement = -1
             for result in heatResult.values():
-                if type(result) != str:
+                if not isinstance(result, str):
                     if result == placement:
                         n_sharedPlacement += 1
             if n_sharedPlacement > 0:
@@ -56,16 +67,19 @@ class pointsAllocation(object):
             while skipPlace in possiblePlacings:
                 possiblePlacings.remove(skipPlace)
         for actualPlacing in heatResult.values():
-            if type(actualPlacing) == str:
-                assert actualPlacing.lower() in possiblePlacings, 'Impossible placement: {0}, only {1} is allowed for this heat.'.format(actualPlacing, possiblePlacings)
+            if isinstance(actualPlacing, str):
+                assert actualPlacing.lower() in possiblePlacings, \
+                    'Impossible placement: {0}, only {1} is allowed for this heat.'.format(
+                    actualPlacing, possiblePlacings)
             else:
-                assert actualPlacing in possiblePlacings, 'Impossible placement: {0}, only {1} is allowed for this heat.'.format(actualPlacing, possiblePlacings)
+                assert actualPlacing in possiblePlacings, \
+                    'Impossible placement: {0}, only {1} is allowed for this heat.'.format(
+                        actualPlacing, possiblePlacings)
         sortedActualPlacing = []
         for result in heatResult.values():
-            if type(result) == str:
+            if isinstance(result, str):
                 continue
-            else:
-                sortedActualPlacing.append(result)
+            sortedActualPlacing.append(result)
         expectedPlacing = []
         i = 0
         j = i
@@ -77,15 +91,18 @@ class pointsAllocation(object):
             j = i
             expectedPlacing.append(j)
         for i, result in enumerate(sorted(sortedActualPlacing)):
-            assert result == expectedPlacing[i], 'Unexpected placement result: {0}, expected: {1}'.format(result, expectedPlacing[i])
+            assert result == expectedPlacing[i], \
+                'Unexpected placement result: {0}, expected: {1}'.format(
+                result, expectedPlacing[i])
 
     def _getDefaultPoints(self,
                           heatResult: dict) -> dict:
+        """ Generates the default set of points for a heat. """
         heatSize = len(heatResult)
         possiblePlacings = self.possiblePlacingGenerator(heatSize)
         defaultPointsIn = self.defaultPointsGenerator(heatSize)
         points = {}
-    
+
         for placement in defaultPointsIn.keys():
             if placement in possiblePlacings:
                 n_sharedPlacement = -1
@@ -95,8 +112,7 @@ class pointsAllocation(object):
                 if n_sharedPlacement > 0:
                     sharedPoints = 0
                     for placement_ in defaultPointsIn.keys():
-                        if ((placement_ <= placement + n_sharedPlacement) and 
-                            (placement_ > placement - 1)):
+                        if placement - 1 < placement_ <= placement + n_sharedPlacement:
                             sharedPoints += defaultPointsIn[placement_]
                     sharedPoints = sharedPoints / (n_sharedPlacement + 1)
                     points[placement] = sharedPoints
@@ -111,18 +127,21 @@ class pointsAllocation(object):
         for skaterNum, result in heatResult.items():
             self.skatersDict[skaterNum].addHeatTime(heatNum)
             if skaterNum in heatTimes.keys():
-                self.skatersDict[skaterNum].addHeatTime(heatNum, heatTimes[skaterNum])
-                    
+                self.skatersDict[skaterNum].addHeatTime(
+                    heatNum, heatTimes[skaterNum])
+
         self._checkPlausiblePlacings(heatResult)
         defaultPoints = self._getDefaultPoints(heatResult)
         n_encounters = max(0, len(heatResult) - 1)
-        for i, (skaterNum, result) in enumerate(heatResult.items()):
-            if type(result) == str:
+        for skaterNum, result in heatResult.items():
+            if isinstance(result, str):
                 if self.verbose:
                     if result.lower() == 'p':
-                        print('Skater {0} receives 0 points. <-- PENALTY'.format(skaterNum))
-                    if result.lower() in ['dnf','dns']:
-                        print('Skater {0} receives 0 points. <-- DNS/DNF'.format(skaterNum))
+                        print(
+                            'Skater {0} receives 0 points. <-- PENALTY'.format(skaterNum))
+                    if result.lower() in ['dnf', 'dns']:
+                        print(
+                            'Skater {0} receives 0 points. <-- DNS/DNF'.format(skaterNum))
                 if result.lower() == 'a':
                     self.skatersDict[skaterNum].points += defaultPoints[2]
                     if self.verbose:
@@ -131,13 +150,17 @@ class pointsAllocation(object):
                 self.skatersDict[skaterNum].points += defaultPoints[result]
         # Update each skater's running average
         for skaterNum in heatResult.keys():
-            self.skatersDict[skaterNum].updateRunningAverageResult(n_encounters)
+            self.skatersDict[skaterNum].updateRunningAverageResult(
+                n_encounters)
             if self.verbose:
-                print('Skater {0} rating: '.format(skaterNum), self.skatersDict[skaterNum].rating)
+                print('Skater {0} rating: '.format(skaterNum),
+                      self.skatersDict[skaterNum].rating)
 
-def randomPenaltyAdvancementMaker(heat: dict, 
-                                  randomizer = Random(), 
+
+def randomPenaltyAdvancementMaker(heat: dict,
+                                  randomizer=Random(),
                                   prob_threshold: float = 0.8) -> dict:
+    """ Function to generate some random results for testing purposes. """
     heatIn = copy.copy(heat)
     defaultResults = list(range(1, len(heat) + 1))
     skaterNums = list(heat.keys())
@@ -167,8 +190,8 @@ def randomPenaltyAdvancementMaker(heat: dict,
                 print('Invalid heat, duplicated results: {}'.format(heat))
             del heat[advSkaterNum]
             n_loop += 1
-        heat[penSkaterNum]='p'
-        heat[advSkaterNum]='a'
+        heat[penSkaterNum] = 'p'
+        heat[advSkaterNum] = 'a'
         heatOut = {}
         finishingOrder = 0
         for result_ in defaultResults:
@@ -180,22 +203,23 @@ def randomPenaltyAdvancementMaker(heat: dict,
                 heatOut[skaterNum] = finishingOrder
         heatOut.update({penSkaterNum: 'p', advSkaterNum: 'a'})
         heat = heatOut
-            
+
         if len(heat) == len(heatIn):
-            return heat     
-        else:
-            return heatIn
+            return heat
+        return heatIn
+
 
 if __name__ == '__main__':
-    #testing Area:
+    # testing Area:
     from participant import skater
-    skatersDict = {}
-    for i in range(1,7):
-        skatersDict[i] = skater(skaterNum = i)
-    pA = pointsAllocation(skatersDict, ratingMaximum = 100.0, verbose = True)
-    heatResult = {1:1, 2:2, 3:2, 4:4, 5:'p', 6:'a'}
-    defaultPoints = pA._getDefaultPoints(heatResult)
-    pA.allocatePoints(heatResult)
-    for skaterNum, skater_ in skatersDict.items():
+    skatersDict_ = {}
+    for ii in range(1, 7):
+        skatersDict_[ii] = skater(skaterNum=ii)
+    pA = pointsAllocation(skatersDict_, ratingMaximum=100.0, verbose=True)
+    heatResult_ = {1: 1, 2: 2, 3: 2, 4: 4, 5: 'p', 6: 'a'}
+    heatTimes_ = {1: 40.0, 2: 40.1, 3: 40.2, 4: 40.3}
+#    defaultPoints_ = pA._getDefaultPoints(heatResult_)
+    pA.allocatePoints(heatResult_, heatTimes_, 1)
+    for skater_ in skatersDict_.values():
         print(skater_.points, ' ', skater_.rating)
-    print(defaultPoints)
+#    print(defaultPoints_)
