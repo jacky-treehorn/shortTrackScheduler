@@ -5,11 +5,42 @@ Created on Tue Feb 22 20:41:04 2022
 @author: rasta
 """
 # pylint: disable=invalid-name
+import os
+from datetime import datetime
 from random import Random
 import copy
+import json
+import logging
 from participant import skater
 import numpy as np
 import pandas as pd
+
+
+def setup_logger(name: str,
+                 log_file: str,
+                 level=logging.INFO,
+                 fmt: str = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                 datefmt: str = '%Y-%m-%d--%H:%M:%S',
+                 verbose: bool = False):
+    """To setup as many loggers as you want"""
+
+    # If the logger exists, kill it.
+    if name in logging.Logger.manager.loggerDict.keys():
+        del logging.Logger.manager.loggerDict[name]
+
+    logger = logging.getLogger(name)
+    handler = logging.FileHandler(log_file)
+    if verbose:
+        console = logging.StreamHandler()
+        console.setLevel(level)
+        console.setFormatter(fmt=fmt)
+        logger.addhandler(console)
+    handler.setFormatter(logging.Formatter(fmt=fmt, datefmt=datefmt))
+
+    logger.setLevel(level)
+    logger.addHandler(handler)
+
+    return logger
 
 
 class raceProgram():
@@ -26,8 +57,16 @@ class raceProgram():
                  participantNames: list = [],
                  participantTeams: dict = {},
                  participantAgeGroup: dict = {},
-                 participantSeeding: dict = {}
+                 participantSeeding: dict = {},
+                 printDetails: bool = False,
+                 cleanCalculationDetails: bool = False
                  ):
+        logging.shutdown()
+        self.printDetailsPath = os.path.join(os.getcwd(), 'calculationDetails')
+        if cleanCalculationDetails:
+            self._cleanCalculationDetails()
+        self._dateTimeFormat = '%Y%m%d-%H%M%S'
+        self.printDetails = printDetails
         self.totalSkaters = totalSkaters
         self.participantNames = participantNames
         if len(self.participantNames) > 0:
@@ -83,32 +122,78 @@ class raceProgram():
         self.heatDict = {}
         self.startLaneStddev = 0.0
         self.resultsTable = None
+        if self.printDetails:
+            if not os.path.exists(self.printDetailsPath):
+                os.mkdir(self.printDetailsPath)
+                os.chmod(self.printDetailsPath, 0o777)
+        self.startLaneLogger = None
+        self.buildHeatsLogger = None
+        if self.printDetails:
+            self.startLaneLogger = setup_logger('startLanes',
+                                                os.path.join(self.printDetailsPath,
+                                                             'startLanes_' + datetime.now().strftime(self._dateTimeFormat)
+                                                             + '.txt'))
+            self.buildHeatsLogger = setup_logger('buildHeats',
+                                                 os.path.join(self.printDetailsPath,
+                                                              'buildHeats_' + datetime.now().strftime(self._dateTimeFormat)
+                                                              + '.txt'))
 
-    def buildResultsTable(self):
+    def _cleanCalculationDetails(self):
+        if os.path.exists(self.printDetailsPath):
+            filesToDelete = []
+            foldersToDelete = []
+            for root, dirs, files in os.walk(self.printDetailsPath):
+                for fil in files:
+                    os.chmod(os.path.join(root, fil), 0o777)
+                    filesToDelete.append(os.path.join(root, fil))
+                for dr in dirs:
+                    os.chmod(os.path.join(root, dr), 0o777)
+                    foldersToDelete.append(os.path.join(root, dr))
+            for fileToDelete in filesToDelete:
+                os.remove(fileToDelete)
+            for folderToDelete in foldersToDelete:
+                os.rmdir(folderToDelete)
+
+    def buildResultsTable(self,
+                          intermediate: bool = False,
+                          intermediatePrint: bool = False,
+                          verbose: bool = True,
+                          heatId: str = '0'):
         """ Calculates the results of all the competitors """
         for skater_ in self.skaterDict.values():
             skater_.averageResults()
             skater_.calculateBestTime()
         dfList = []
         for skater_ in self.skaterDict.values():
+            rating = skater_.averageResult
+            if intermediate:
+                rating = skater_.rating
             dfList.append({'skaterNum': skater_.skaterNum,
-                           'rating': skater_.averageResult,
+                           'rating': rating,
                            'bestTime': skater_.bestTime,
                            'skaterName': skater_.name,
-                           'skaterTeam': skater_.team})
+                           'skaterTeam': skater_.team,
+                           'encounters': skater_.cumulativeEncounters})
         ranking = pd.DataFrame(dfList)
-        print('\n')
-        print('Rankings')
-        self.resultsTable = ranking.sort_values(by=['rating', 'bestTime'],
-                                                ascending=[False, True])
-        print(self.resultsTable)
+        self.resultsTable = ranking[ranking['encounters'] > 0].sort_values(by=['rating', 'bestTime'],
+                                                                           ascending=[False, True])
+        self.resultsTable.drop(columns=['encounters'], inplace=True)
+        if verbose:
+            print('Rankings')
+            print(self.resultsTable)
+        if intermediatePrint:
+            self.resultsTable.to_csv(os.path.join(self.printDetailsPath,
+                                     'results_intermediate_heat_{0}_'.format(heatId)+datetime.now().strftime(self._dateTimeFormat)+'.csv'), sep=';')
+        if not intermediate and self.printDetails:
+            self.resultsTable.to_csv(os.path.join(self.printDetailsPath,
+                                     'results_'+datetime.now().strftime(self._dateTimeFormat)+'.csv'), sep=';')
         return self.resultsTable
 
     def buildHeats(self,
                    max_attempts: int = 10000,
                    adjustAfterNAttempts: int = 500,
                    encounterFlexibility: int = 0,
-                   verbose: bool = False) -> dict:
+                   verbose: bool = True) -> dict:
         """ Calculates a heat structure """
         adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
         if self.numRacesPerSkater == 0:
@@ -152,27 +237,50 @@ class raceProgram():
                 if n_appearanceErrorsResets % 2:
                     n_encounterErrors = 0
                     shift += 1
-                    print('Increasing shift: {}'.format(shift))
+                    if verbose:
+                        print('Increasing shift: {}'.format(shift))
+                    if self.printDetails:
+                        self.buildHeatsLogger.info(
+                            'Increasing shift: %s', shift)
                 else:
                     n_personalEncounterErrors = 0
                     encounterFlexibility += 1
-                    print('Increasing encounterFlexibility: {}'.format(
-                        encounterFlexibility))
+                    if verbose:
+                        print('Increasing encounterFlexibility: {}'.format(
+                            encounterFlexibility))
+                    if self.printDetails:
+                        self.buildHeatsLogger.info(
+                            'Increasing encounterFlexibility: %s', encounterFlexibility)
             if n_encounterErrors > adjustAfterNAttempts:
                 n_encounterErrors = 0
                 shift += 1
-                print('Increasing shift: {}'.format(shift))
+                if verbose:
+                    print('Increasing shift: {}'.format(shift))
+                if self.printDetails:
+                    self.buildHeatsLogger.info('Increasing shift: %s', shift)
+
             if n_personalEncounterErrors > adjustAfterNAttempts:
                 n_personalEncounterErrors = 0
                 encounterFlexibility += 1
-                print('Increasing encounterFlexibility: {}'.format(
-                    encounterFlexibility))
+                if verbose:
+                    print('Increasing encounterFlexibility: {}'.format(
+                        encounterFlexibility))
+                if self.printDetails:
+                    self.buildHeatsLogger.info(
+                        'Increasing encounterFlexibility: %s', encounterFlexibility)
             if n_seedingErrors > adjustAfterNAttempts:
                 n_seedingErrors = 0
                 sampleStdDev *= 1.1
-                print('Increasing sampleStdDev: {}'.format(sampleStdDev))
+                if verbose:
+                    print('Increasing sampleStdDev: {}'.format(sampleStdDev))
+                if self.printDetails:
+                    self.buildHeatsLogger.info(
+                        'Increasing sampleStdDev: %s', sampleStdDev)
             if n_attempts >= max_attempts:
                 print('No success after {} attempts. Quitting.'.format(n_attempts))
+                if self.printDetails:
+                    self.buildHeatsLogger.info(
+                        'No success after %s attempts. Quitting.', n_attempts)
                 return {}
             self.randomizer.shuffle(skaterNums)
             for i_skater in skaterNums:
@@ -234,9 +342,11 @@ class raceProgram():
                 del heatDict[heatNum]
             if not all((len(heat_['heat']) >= self.minHeatSize for heat_ in heatDict.values())):
                 if verbose:
-                    print('\n')
-                    print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(
+                    print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                         n_attempts))
+                if self.printDetails:
+                    self.buildHeatsLogger.info(
+                        'heatSizeError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
                 self.reorganizeHeats(heatDict)
             if all((skater_.totalAppearances == self.numRacesPerSkater for skater_ in self.skaterDict.values())):
                 allEncounters = [
@@ -250,8 +360,11 @@ class raceProgram():
                 if encountersError:
                     n_encounterErrors += 1
                     if verbose:
-                        print('encountersError: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(
+                        print('encountersError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                             n_attempts))
+                    if self.printDetails:
+                        self.buildHeatsLogger.info(
+                            'encountersError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
                     self.reorganizeHeats(heatDict)
                     continue
                 seedingErrors = False
@@ -262,31 +375,54 @@ class raceProgram():
                 if seedingErrors:
                     n_seedingErrors += 1
                     if verbose:
-                        print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(
+                        print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                             n_attempts))
+                    if self.printDetails:
+                        self.buildHeatsLogger.info(
+                            'seedingErrors: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+
                     self.reorganizeHeats(heatDict)
                     continue
                 if self.fairStartLanes:
                     self.makeStartLanesFair(heatDict)
                 print('Success after {} attempts.'.format(n_attempts))
+                if self.printDetails:
+                    self.buildHeatsLogger.info(
+                        'Success after %s attempts.', n_attempts)
+
                 break
             else:
                 if verbose:
-                    print('\n')
-                    print('totalAppearancesError: Attempt {0} produced an unfavourable Heat structure, modifying...\n'.format(
+                    print('totalAppearancesError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                         n_attempts))
+                if self.printDetails:
+                    self.buildHeatsLogger.info(
+                        'totalAppearancesError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
                 n_appearancesErrors += 1
                 self.reorganizeHeats(heatDict)
         if shift > 1:
-            print('\n')
             print(
                 'WARNING! Some skaters may have noticably fewer encounters than others.')
-            print('\n')
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'WARNING! Some skaters may have noticably fewer encounters than others. Shift = %s', shift)
+
         heatSpacing = self.spaceHeatsOut(heatDict)
+        if len(heatSpacing) == 0:
+            print(
+                'WARNING!: No suitable heat spacing could be found.')
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'WARNING!: No suitable heat spacing could be found.')
         if len(heatSpacing) > 0:
-            print('\n')
-            print('Optimal heat order: ', heatSpacing)
-            print('Heats will be renumbered...')
+            if verbose:
+                print('Optimal heat order: ', heatSpacing)
+                print('Heats will be renumbered...')
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'Optimal heat order: %s', heatSpacing)
+                self.buildHeatsLogger.info('Heats will be renumbered...')
+
             self.heatOrder = [x for x in heatSpacing if isinstance(x, int)]
             heatDict_ = {}
             for skater_ in self.skaterDict.values():
@@ -298,18 +434,34 @@ class raceProgram():
             heatDict = heatDict_
         self.heatDict = heatDict
         for heatNum, heat in heatDict.items():
+            printText = 'Heat {0}: {1}'.format(heatNum, heat['heat'])
             if self.considerSeeding:
-                print('Heat {0}: '.format(heatNum), heat['heat'], ' Seeding Check: {0}'.format(
-                    np.abs(heat['averageSeeding'] - averageSeeding) < sampleStdDev))
-            else:
-                print('Heat {0}: '.format(heatNum), heat['heat'])
+                printText = 'Heat {0}: {1}, Seeding Check: {2}'.format(
+                    heatNum, heat['heat'], np.abs(heat['averageSeeding'] - averageSeeding) < sampleStdDev)
+            if verbose:
+                print(printText)
+            if self.printDetails:
+                self.buildHeatsLogger.info(printText)
         for skater_ in self.skaterDict.values():
-            print('Skater {0} appears in {1} heats: '.format(skater_.skaterNum, skater_.totalAppearances), skater_.heatAppearances,
-                  ', Total encounters: {0}, Total unique encounters: {1}'.format(skater_.totalEncounters, skater_.totalUniqueEncounters))
+            if verbose:
+                print('Skater {0} appears in {1} heats: '.format(skater_.skaterNum, skater_.totalAppearances), skater_.heatAppearances,
+                      ', Total encounters: {0}, Total unique encounters: {1}'.format(skater_.totalEncounters, skater_.totalUniqueEncounters))
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'Skater %s appears in %s heats: ', skater_.skaterNum, skater_.totalAppearances)
+                self.buildHeatsLogger.info(
+                    'Skater %s all appearances %s', skater_.skaterNum, skater_.heatAppearances)
+                self.buildHeatsLogger.info('Skater %s, Total encounters: %s, Total unique encounters: %s',
+                                           skater_.skaterNum, skater_.totalEncounters, skater_.totalUniqueEncounters)
             for heatNum_ in skater_.heatAppearances:
                 assert skater_.skaterNum in self.heatDict[heatNum_]['heat'], \
                     'heatAllocationError: Skater {0} is not in the allocated heat: {1}'.format(
                         skater_.skaterNum, self.heatDict[heatNum_]['heat'])
+        if self.printDetails:
+            with open(os.path.join(self.printDetailsPath, 'heats_' +
+                                   datetime.now().strftime(self._dateTimeFormat)+'.json'), 'w') as fil:
+                json.dump(heatDict, fil, indent=4)
+
         return heatDict
 
     def reorganizeHeats(self, heatDict: dict):
@@ -331,7 +483,9 @@ class raceProgram():
             while skaterNum in heatDict[heatNum]['heat']:
                 heatDict[heatNum]['heat'].remove(skaterNum)
 
-    def makeStartLanesFair(self, heatDict: dict):
+    def makeStartLanesFair(self,
+                           heatDict: dict,
+                           verbose: bool = True):
         """ Does what it says """
         skaterDict = {}
         for heatNum, heat in heatDict.items():
@@ -442,16 +596,27 @@ class raceProgram():
                 lowestValueIndex = np.argmax(np.asarray(
                     skaterDict[mostDisadvantagedSkater]['values']))
                 correspondingHeat = skaterDict[mostDisadvantagedSkater]['heatNum'][lowestValueIndex]
-        print('\n')
-        print('Assumed start lane values: ', self._laneValues)
-        print('Stddev of start lane values: ', newStddev)
+
+        if self.printDetails:
+            self.startLaneLogger.info(
+                'Assumed start lane values: %s', self._laneValues)
+            self.startLaneLogger.info(
+                'Stddev of start lane values: %s', newStddev)
+
+        if verbose:
+            print('Assumed start lane values: ', self._laneValues)
+            print('Stddev of start lane values: ', newStddev)
         self.startLaneStddev = newStddev
         for skater_, value in skaterDict.items():
             self.skaterDict[skater_]._startPositionValues = value['values']
             self.skaterDict[skater_]._startLanes = value['lanes']
-            print('Skater {0} average start lane value: '.format(skater_), sum(
-                value['values'])/len(value['values']), ' lanes: ', value['lanes'])
-        print('\n')
+            if verbose:
+                print('Skater {0} average start lane value: {1}, lanes: {2}'.format(skater_, sum(
+                    value['values'])/len(value['values']), value['lanes']))
+            if self.printDetails:
+                aveVal = sum(value['values'])/len(value['values'])
+                self.startLaneLogger.info(
+                    'Skater %s average start lane value: %.3f , lanes: %s', skater_, aveVal, value["lanes"])
 
     def spaceHeatsOut(self, heatsDict: dict) -> list:
         """ Spaces out heats so that skaters aren't skating too often. """
@@ -470,8 +635,6 @@ class raceProgram():
         n_attempts = -1
         while True:
             if n_attempts > 1000:
-                print(
-                    'WARNING!: No suitable heat spacing could be found after 1000 attempts.')
                 concludedHeats_ = []
                 break
             n_attempts += 1

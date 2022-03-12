@@ -11,12 +11,14 @@ from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
 
 if __name__ == "__main__":
-    raceProgram_ = raceProgram(totalSkaters=20,
-                               numRacesPerSkater=3,
-                               heatSize=5,
-                               considerSeeding=False,
+    raceProgram_ = raceProgram(totalSkaters=13,
+                               numRacesPerSkater=4,
+                               heatSize=4,
+                               considerSeeding=True,
                                fairStartLanes=True,
-                               minHeatSize=3
+                               minHeatSize=3,
+                               printDetails=True,
+                               cleanCalculationDetails=True
                                )
     heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=1000)
     pa = pointsAllocation(raceProgram_.skaterDict,
@@ -40,4 +42,7 @@ if __name__ == "__main__":
         print('\n')
         print('Heat {0} result: {1}'.format(heatId, heat_))
         pa.allocatePoints(heat_, heatTimes, heatId)
+        print('Intermediate results:\n')
+        raceProgram_.buildResultsTable(
+            intermediate=True, intermediatePrint=True, heatId=heatId)
     resultsTable = raceProgram_.buildResultsTable()
