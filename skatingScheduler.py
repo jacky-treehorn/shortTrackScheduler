@@ -13,15 +13,15 @@ from schedule import raceProgram
 
 if __name__ == "__main__":
     raceProgram_ = raceProgram(totalSkaters=18,
-                               numRacesPerSkater=3,
-                               heatSize=5,
-                               considerSeeding=False,
+                               numRacesPerSkater=4,
+                               heatSize=4,
+                               considerSeeding=True,
                                fairStartLanes=True,
                                minHeatSize=3,
                                printDetails=True,
                                cleanCalculationDetails=True
                                )
-    heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=500)
+    heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000)
     if len(heatDict) == 0:
         print('No suitable heat structure could be found, exiting.')
         sys.exit()

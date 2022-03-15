@@ -280,6 +280,9 @@ class raceProgram():
                                                               + '.txt'))
         self.shift = 0
         self.n_encounterErrors = 0
+        self.skaterNums = list(range(self.totalSkaters))
+        self.averageSeeding = float(self.totalSkaters + 1) / 2.0
+        self.sampleStdDev = np.std(self.skaterNums)/np.sqrt(self.heatSize)
 
     def _cleanCalculationDetails(self):
         if os.path.exists(self.printDetailsPath):
@@ -440,16 +443,13 @@ class raceProgram():
                       encounterFlexibility: int = 0,
                       verbose: bool = False
                       ) -> dict:
-        skaterNums = list(range(self.totalSkaters))
-        averageSeeding = float(self.totalSkaters + 1) / 2.0
-        sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)
 
         conTests = convergenceTests(minHeatSize=self.minHeatSize,
                                     verbose=verbose,
                                     printDetails=self.printDetails,
-                                    averageSeeding=averageSeeding,
+                                    averageSeeding=self.averageSeeding,
                                     numRacesPerSkater=self.numRacesPerSkater,
-                                    sampleStdDev=sampleStdDev)
+                                    sampleStdDev=self.sampleStdDev)
         heatDict = {}
         n_attempts = 1
         n_encounterErrors = 0
@@ -497,20 +497,20 @@ class raceProgram():
                         'Increasing encounterFlexibility: %s', encounterFlexibility)
             if n_seedingErrors > adjustAfterNAttempts:
                 n_seedingErrors = 0
-                sampleStdDev *= 1.1
+                self.sampleStdDev *= 1.1
                 if verbose:
-                    print('Increasing sampleStdDev: {}'.format(sampleStdDev))
+                    print('Increasing sampleStdDev: {}'.format(self.sampleStdDev))
                 if self.printDetails:
                     self.buildHeatsLogger.info(
-                        'Increasing sampleStdDev: %s', sampleStdDev)
+                        'Increasing sampleStdDev: %s', self.sampleStdDev)
             if n_attempts >= max_attempts:
                 print('No success after {} attempts. Quitting.'.format(n_attempts))
                 if self.printDetails:
                     self.buildHeatsLogger.info(
                         'No success after %s attempts. Quitting.', n_attempts)
                 return {}
-            self.randomizer.shuffle(skaterNums)
-            for i_skater in skaterNums:
+            self.randomizer.shuffle(self.skaterNums)
+            for i_skater in self.skaterNums:
                 if self.skaterDict[i_skater].totalAppearances >= self.numRacesPerSkater:
                     continue
                 heatNum = 0
@@ -553,10 +553,7 @@ class raceProgram():
                     if self.skaterDict[i_skater].totalAppearances >= self.numRacesPerSkater:
                         break
             heatsToDelete = []
-            longestHeatLength = 0
             for heatNum, heat in heatDict.items():
-                if len(heat['heat']) > longestHeatLength:
-                    longestHeatLength = len(heat['heat'])
                 if len(heat['heat']) < self.minHeatSize:
                     heatsToDelete.append(heatNum)
                     for skaterNum_0 in heat['heat']:
@@ -578,6 +575,10 @@ class raceProgram():
                 self.reorganizeHeats(heatDict)
                 continue
 
+            longestHeatLength = 0
+            for heatNum, heat in heatDict.items():
+                if len(heat['heat']) > longestHeatLength:
+                    longestHeatLength = len(heat['heat'])
             heatAsArray = np.zeros((len(heatDict), longestHeatLength))
             for heatInd, heat in enumerate(heatDict.values()):
                 heatAsArray[heatInd, :len(heat['heat'])] = heat['heat']
@@ -601,6 +602,7 @@ class raceProgram():
                                                            n_attempts,
                                                            logger=self.buildHeatsLogger)
             if tr == 0:
+                shift += 1
                 self.reorganizeHeats(heatDict)
                 continue
             if self.considerSeeding:
@@ -634,10 +636,7 @@ class raceProgram():
         if self.numRacesPerSkater == 0:
             while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
                 self.numRacesPerSkater += 1
-        skaterNums = list(range(self.totalSkaters))
-        averageSeeding = float(self.totalSkaters + 1) / 2.0
-        sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)
-        for i_skater in skaterNums:
+        for i_skater in self.skaterNums:
             skaterName = 'Person_'+str(i_skater)
             if i_skater < len(self.participantNames):
                 skaterName = self.participantNames[i_skater]
@@ -698,7 +697,7 @@ class raceProgram():
             printText = 'Heat {0}: {1}'.format(heatNum, heat['heat'])
             if self.considerSeeding:
                 printText = 'Heat {0}: {1}, Seeding Check: {2}'.format(
-                    heatNum, heat['heat'], np.abs(heat['averageSeeding'] - averageSeeding) < sampleStdDev)
+                    heatNum, heat['heat'], np.abs(heat['averageSeeding'] - self.averageSeeding) < self.sampleStdDev)
             if verbose:
                 print(printText)
             if self.printDetails:
@@ -933,16 +932,13 @@ class raceProgram():
                                  self.numRacesPerSkater,
                                  self.heatSize,
                                  maxTheoreticalMatrixDims)
-        skaterNums = list(range(self.totalSkaters))
-        averageSeeding = float(self.totalSkaters + 1) / 2.0
-        sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)
 
         conTests = convergenceTests(minHeatSize=self.minHeatSize,
                                     verbose=verbose,
                                     printDetails=self.printDetails,
-                                    averageSeeding=averageSeeding,
+                                    averageSeeding=self.averageSeeding,
                                     numRacesPerSkater=self.numRacesPerSkater,
-                                    sampleStdDev=sampleStdDev)
+                                    sampleStdDev=self.sampleStdDev)
         for i in range(initM.shape[0]):
             if all((x == -1 for x in initM[i, :])):
                 break
