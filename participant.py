@@ -50,6 +50,11 @@ class skater():
         self.totalEncounters = len(self.encounters)
         self.totalUniqueEncounters = len(set(self.encounters))
 
+    def removeAllEncounters(self):
+        self.encounters = []
+        self.totalEncounters = len(self.encounters)
+        self.totalUniqueEncounters = len(set(self.encounters))
+
     def addEncounterFlexible(self, otherSkaterNum: int):
         """ Flexibly adds a different skater to this skater's encounters. """
         if otherSkaterNum != self.skaterNum:
