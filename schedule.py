@@ -14,6 +14,8 @@ import logging
 from participant import skater
 import numpy as np
 import pandas as pd
+from random import shuffle
+from scipy.optimize import minimize
 
 
 def setup_logger(name: str,
@@ -41,6 +43,145 @@ def setup_logger(name: str,
     logger.addHandler(handler)
 
     return logger
+
+
+def initializeMatrix(nSkaters: int,
+                     reqAppearances: int,
+                     optimalHeatSize: int,
+                     maxDims: tuple) -> np.array:
+    """Builds your initial Heat Matrix"""
+    initMat = -np.ones(maxDims, int)
+    out = []
+    skaterList = list(range(nSkaters))*reqAppearances
+    np.random.shuffle(skaterList)
+    heat = []
+    for i in skaterList:
+        heat.append(i)
+        if len(heat) == optimalHeatSize:
+            out.append(heat)
+            heat = []
+    if len(heat) != 0:
+        while len(heat) < optimalHeatSize:
+            heat.append(-1)
+        out.append(heat)
+    out = np.asarray(out)
+    initMat[:out.shape[0], :out.shape[1]] = out
+    return initMat
+
+
+def kroneckerDelta(x: int,
+                   y: int) -> float:
+    """Calculates the kronecker delta"""
+    out = 0
+    if x == y:
+        out = 1
+    return float(out)
+
+
+class convergenceTests():
+
+    def __init__(self,
+                 minHeatSize: int,
+                 verbose: bool = True,
+                 printDetails: bool = True,
+                 averageSeeding: float = 0.0,
+                 numRacesPerSkater: int = 0,
+                 sampleStdDev: float = 0.0
+                 ):
+        self.minHeatSize = minHeatSize
+        self.verbose = verbose
+        self.printDetails = printDetails
+        self.averageSeeding = averageSeeding
+        self.numRacesPerSkater = numRacesPerSkater
+        self.sampleStdDev = sampleStdDev
+
+    def heatLengthTest(self,
+                       heatDict: dict,
+                       n_attempts: int = 0,
+                       logger=None) -> int:
+
+        if not all((len(heat_['heat']) >= self.minHeatSize for heat_ in heatDict.values())):
+            if self.verbose:
+                print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
+                    n_attempts))
+            if self.printDetails:
+                if logger is not None:
+                    logger.info(
+                        'heatSizeError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+            return 0
+        if any((len(heat_['heat']) != len(set(heat_['heat'])) for heat_ in heatDict.values())):
+            if self.verbose:
+                print('heatUniquenessError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
+                    n_attempts))
+            if self.printDetails:
+                if logger is not None:
+                    logger.info(
+                        'heatUniquenessError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+            return 0
+        return 1
+
+    def appearanceTest(self,
+                       n_appearancesErrors: int,
+                       skaterDict: dict,
+                       n_attempts: int = 0,
+                       logger=None) -> tuple:
+        if not all((skater_.totalAppearances == self.numRacesPerSkater for skater_ in skaterDict.values())):
+            if self.verbose:
+                print('totalAppearancesError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
+                    n_attempts))
+            if self.printDetails:
+                if logger is not None:
+                    logger.info(
+                        'totalAppearancesError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+            n_appearancesErrors += 1
+            return 0, n_appearancesErrors
+        return 1, n_appearancesErrors
+
+    def encounterTest(self,
+                      n_encounterErrors: int,
+                      shift: int,
+                      skaterDict: dict,
+                      n_attempts: int = 0,
+                      logger=None) -> tuple:
+        allEncounters = [
+            x.totalEncounters for x in skaterDict.values()]
+        encountersError = False
+        for i, enctr in enumerate(allEncounters):
+            for j in range(i+1, len(allEncounters)):
+                if np.abs(enctr - allEncounters[j]) > shift:
+                    encountersError = True
+                    break
+        if encountersError:
+            n_encounterErrors += 1
+            if self.verbose:
+                print('encountersError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
+                    n_attempts))
+            if self.printDetails:
+                if logger is not None:
+                    logger.info(
+                        'encountersError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+            return 0, n_encounterErrors
+        return 1, n_encounterErrors
+
+    def seedingTest(self,
+                    n_seedingErrors: int,
+                    heatDict: dict,
+                    n_attempts: int = 0,
+                    logger=None) -> tuple:
+        seedingErrors = False
+        for heat in heatDict.values():
+            if np.abs(heat['averageSeeding'] - self.averageSeeding) > self.sampleStdDev:
+                seedingErrors = True
+        if seedingErrors:
+            n_seedingErrors += 1
+            if self.verbose:
+                print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
+                    n_attempts))
+            if self.printDetails:
+                logger.info(
+                    'seedingErrors: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+            return 0, n_seedingErrors
+        return 1, n_seedingErrors
 
 
 class raceProgram():
@@ -137,6 +278,8 @@ class raceProgram():
                                                  os.path.join(self.printDetailsPath,
                                                               'buildHeats_' + datetime.now().strftime(self._dateTimeFormat)
                                                               + '.txt'))
+        self.shift = 0
+        self.n_encounterErrors = 0
 
     def _cleanCalculationDetails(self):
         if os.path.exists(self.printDetailsPath):
@@ -189,38 +332,124 @@ class raceProgram():
                                      'results_'+datetime.now().strftime(self._dateTimeFormat)+'.csv'), sep=';')
         return self.resultsTable
 
-    def buildHeats(self,
-                   max_attempts: int = 10000,
-                   adjustAfterNAttempts: int = 500,
-                   encounterFlexibility: int = 0,
-                   verbose: bool = True) -> dict:
-        """ Calculates a heat structure """
-        adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
-        if self.numRacesPerSkater == 0:
-            while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
-                self.numRacesPerSkater += 1
+    def _appearancePotential(self,
+                             heatMat: np.array) -> float:
+        """Calculates the appearance potential"""
+        pot = 0
+        val, counts = np.unique(
+            np.rint(heatMat.flatten()).astype(int), return_counts=True)
+        binCountInit = dict(
+            zip(range(self.totalSkaters), [0]*self.totalSkaters))
+        binCount = dict(zip(val, counts))
+        for skater_, count in binCountInit.items():
+            if skater_ in binCount.keys():
+                continue
+            binCount[skater_] = count
+        for skater_n in range(self.totalSkaters):
+            count = 0
+            count = binCount[skater_n]
+            pot += (self.numRacesPerSkater - count)**2
+        return float(pot)
+
+    def _encounterPotential(self,
+                            heatMatIn: np.array,
+                            maxTheoreticalMatrixDims: tuple) -> float:
+        """Calculates the encounter potential"""
+        expectedEncounters = ((self.heatSize-1) *
+                              self.numRacesPerSkater) - self.n_encounterErrors
+        expectedEncounters = max(expectedEncounters, self.totalSkaters//2)
+        encounterFactor = expectedEncounters/self.totalSkaters
+        heatMat = heatMatIn
+        if heatMatIn.ndim == 1:
+            heatMat = heatMatIn.reshape(maxTheoreticalMatrixDims)
+        binCountRowWise = []
+        for i in range(heatMat.shape[0]):
+            val, counts = np.unique(
+                np.rint(heatMat[i, :]).astype(int), return_counts=True)
+            binCount = dict(zip(val, counts))
+            binCountRowWise.append(binCount)
+        pot = 0
+        for i in range(self.totalSkaters):
+            encounters = []
+            for j in range(self.totalSkaters):
+                if i == j:
+                    continue
+                for row in binCountRowWise:
+                    if i in row.keys() and j in row.keys():
+                        if encounters.count(j) > encounterFactor:
+                            continue
+                        encounters.append(j)
+            pot += (expectedEncounters - len(encounters))**2
+        return float(pot)
+
+    def _heatSizePotential(self,
+                           heatMatIn: np.array,
+                           maxTheoreticalMatrixDims: tuple) -> float:
+        """Calculates the heat size potential"""
+        heatMat = heatMatIn
+        if heatMatIn.ndim == 1:
+            heatMat = heatMatIn.reshape(maxTheoreticalMatrixDims)
+        skaters = list(range(self.totalSkaters))
+        pot = 0
+        for i in range(heatMat.shape[0]):
+            rowSum = 0
+            if all((x < 0 for x in np.rint(heatMat[i, :]))):
+                continue
+            for skater_ in np.rint(heatMat[i, :]).astype(int):
+                if skater_ in skaters:
+                    rowSum += 1
+            pot += (rowSum - self.heatSize)**2
+        return float(pot)
+
+    def _heatUniquenessPotential(self,
+                                 heatMatIn: np.array,
+                                 maxTheoreticalMatrixDims: tuple) -> float:
+        """Calculates the uniqueness potential"""
+        heatMat = heatMatIn
+        if heatMatIn.ndim == 1:
+            heatMat = heatMatIn.reshape(maxTheoreticalMatrixDims)
+        pot = 0
+        for i in range(heatMat.shape[0]):
+            rowSum = 0
+            for j in range(heatMat.shape[1]):
+                if np.rint(heatMat[i, j]) < 0:
+                    continue
+                for k in range(j+1, heatMat.shape[1]):
+                    if np.rint(heatMat[i, k]) < 0:
+                        continue
+                    rowSum += kroneckerDelta(
+                        np.rint(heatMat[i, j]), np.rint(heatMat[i, k]))
+            pot += rowSum
+        return float(pot)
+
+    def heatPotentialCalc(self,
+                          heatMat: np.array,
+                          maxTheoreticalMatrixDims: tuple) -> float:
+        pot = self._appearancePotential(heatMat)
+        pot += self._encounterPotential(heatMat,
+                                        maxTheoreticalMatrixDims)
+        pot += self._heatSizePotential(heatMat,
+                                       maxTheoreticalMatrixDims)
+        pot += self._heatUniquenessPotential(heatMat,
+                                             maxTheoreticalMatrixDims)
+        return pot
+
+    def _randomSearch(self,
+                      max_attempts: int = 10000,
+                      adjustAfterNAttempts: int = 500,
+                      encounterFlexibility: int = 0,
+                      verbose: bool = False
+                      ) -> dict:
         skaterNums = list(range(self.totalSkaters))
         averageSeeding = float(self.totalSkaters + 1) / 2.0
         sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)
-        for i_skater in skaterNums:
-            skaterName = 'Person_'+str(i_skater)
-            if i_skater < len(self.participantNames):
-                skaterName = self.participantNames[i_skater]
-            seed = i_skater + 1
-            if skaterName in self.participantSeeding.keys():
-                seed = self.participantSeeding[skaterName]
-            team = None
-            if skaterName in self.participantTeams.keys():
-                team = self.participantTeams[skaterName]
-            ageCategory = None
-            if skaterName in self.participantAgeGroup.keys():
-                ageCategory = self.participantAgeGroup[skaterName]
 
-            self.skaterDict[i_skater] = skater(i_skater,
-                                               seed=seed,
-                                               name=skaterName,
-                                               team=team,
-                                               ageCategory=ageCategory)
+        conTests = convergenceTests(minHeatSize=self.minHeatSize,
+                                    verbose=verbose,
+                                    printDetails=self.printDetails,
+                                    averageSeeding=averageSeeding,
+                                    numRacesPerSkater=self.numRacesPerSkater,
+                                    sampleStdDev=sampleStdDev)
         heatDict = {}
         n_attempts = 1
         n_encounterErrors = 0
@@ -230,7 +459,6 @@ class raceProgram():
         n_appearanceErrorsResets = 0
         shift = 0
         while True:
-            n_attempts += 1
             if n_appearancesErrors > adjustAfterNAttempts:
                 n_appearancesErrors = 0
                 n_appearanceErrorsResets += 1
@@ -258,7 +486,6 @@ class raceProgram():
                     print('Increasing shift: {}'.format(shift))
                 if self.printDetails:
                     self.buildHeatsLogger.info('Increasing shift: %s', shift)
-
             if n_personalEncounterErrors > adjustAfterNAttempts:
                 n_personalEncounterErrors = 0
                 encounterFlexibility += 1
@@ -326,7 +553,10 @@ class raceProgram():
                     if self.skaterDict[i_skater].totalAppearances >= self.numRacesPerSkater:
                         break
             heatsToDelete = []
+            longestHeatLength = 0
             for heatNum, heat in heatDict.items():
+                if len(heat['heat']) > longestHeatLength:
+                    longestHeatLength = len(heat['heat'])
                 if len(heat['heat']) < self.minHeatSize:
                     heatsToDelete.append(heatNum)
                     for skaterNum_0 in heat['heat']:
@@ -340,73 +570,105 @@ class raceProgram():
                                     skaterNum_0)
             for heatNum in heatsToDelete:
                 del heatDict[heatNum]
-            if not all((len(heat_['heat']) >= self.minHeatSize for heat_ in heatDict.values())):
-                if verbose:
-                    print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
-                        n_attempts))
-                if self.printDetails:
-                    self.buildHeatsLogger.info(
-                        'heatSizeError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+
+            tr = conTests.heatLengthTest(heatDict,
+                                         n_attempts,
+                                         logger=self.buildHeatsLogger)
+            if tr == 0:
                 self.reorganizeHeats(heatDict)
-            if all((skater_.totalAppearances == self.numRacesPerSkater for skater_ in self.skaterDict.values())):
-                allEncounters = [
-                    x.totalEncounters for x in self.skaterDict.values()]
-                encountersError = False
-                for i, enctr in enumerate(allEncounters):
-                    for j in range(i+1, len(allEncounters)):
-                        if np.abs(enctr - allEncounters[j]) > shift:
-                            encountersError = True
-                            break
-                if encountersError:
-                    n_encounterErrors += 1
-                    if verbose:
-                        print('encountersError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
-                            n_attempts))
-                    if self.printDetails:
-                        self.buildHeatsLogger.info(
-                            'encountersError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
+                continue
+
+            heatAsArray = np.zeros((len(heatDict), longestHeatLength))
+            for heatInd, heat in enumerate(heatDict.values()):
+                heatAsArray[heatInd, :len(heat['heat'])] = heat['heat']
+            heatScore = self.heatPotentialCalc(heatAsArray, heatAsArray.shape)
+            if verbose:
+                print('Heat Score: {}'.format(heatScore))
+            if self.printDetails:
+                self.buildHeatsLogger.info('Heat Score: %s', heatScore)
+
+            tr, n_appearancesErrors = conTests.appearanceTest(n_appearancesErrors,
+                                                              self.skaterDict,
+                                                              n_attempts,
+                                                              logger=self.buildHeatsLogger)
+            if tr == 0:
+                self.reorganizeHeats(heatDict)
+                continue
+            n_attempts += 1
+            tr, n_encounterErrors = conTests.encounterTest(n_encounterErrors,
+                                                           shift,
+                                                           self.skaterDict,
+                                                           n_attempts,
+                                                           logger=self.buildHeatsLogger)
+            if tr == 0:
+                self.reorganizeHeats(heatDict)
+                continue
+            if self.considerSeeding:
+                tr, n_seedingErrors = conTests.seedingTest(n_seedingErrors,
+                                                           heatDict,
+                                                           n_attempts,
+                                                           logger=self.buildHeatsLogger)
+                if tr == 0:
                     self.reorganizeHeats(heatDict)
                     continue
-                seedingErrors = False
-                if self.considerSeeding:
-                    for heatNum, heat in heatDict.items():
-                        if np.abs(heat['averageSeeding'] - averageSeeding) > sampleStdDev:
-                            seedingErrors = True
-                if seedingErrors:
-                    n_seedingErrors += 1
-                    if verbose:
-                        print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
-                            n_attempts))
-                    if self.printDetails:
-                        self.buildHeatsLogger.info(
-                            'seedingErrors: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
-
-                    self.reorganizeHeats(heatDict)
-                    continue
-                if self.fairStartLanes:
-                    self.makeStartLanesFair(heatDict)
-                print('Success after {} attempts.'.format(n_attempts))
-                if self.printDetails:
-                    self.buildHeatsLogger.info(
-                        'Success after %s attempts.', n_attempts)
-
+            if self.fairStartLanes:
+                self.makeStartLanesFair(heatDict)
+            print('Success after {} attempts.'.format(n_attempts))
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'Success after %s attempts.', n_attempts)
                 break
-            else:
-                if verbose:
-                    print('totalAppearancesError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
-                        n_attempts))
-                if self.printDetails:
-                    self.buildHeatsLogger.info(
-                        'totalAppearancesError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
-                n_appearancesErrors += 1
-                self.reorganizeHeats(heatDict)
-        if shift > 1:
+        self.shift = shift
+        return heatDict
+
+    def buildHeats(self,
+                   max_attempts: int = 10000,
+                   adjustAfterNAttempts: int = 500,
+                   encounterFlexibility: int = 0,
+                   verbose: bool = True,
+                   method: str = 'random_search') -> dict:
+        """ Calculates a heat structure """
+        assert method in ['random_search', 'gradopt'], 'method must be either {}'.format(
+            ['random_search', 'gradopt'])
+        adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
+        if self.numRacesPerSkater == 0:
+            while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
+                self.numRacesPerSkater += 1
+        skaterNums = list(range(self.totalSkaters))
+        averageSeeding = float(self.totalSkaters + 1) / 2.0
+        sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)
+        for i_skater in skaterNums:
+            skaterName = 'Person_'+str(i_skater)
+            if i_skater < len(self.participantNames):
+                skaterName = self.participantNames[i_skater]
+            seed = i_skater + 1
+            if skaterName in self.participantSeeding.keys():
+                seed = self.participantSeeding[skaterName]
+            team = None
+            if skaterName in self.participantTeams.keys():
+                team = self.participantTeams[skaterName]
+            ageCategory = None
+            if skaterName in self.participantAgeGroup.keys():
+                ageCategory = self.participantAgeGroup[skaterName]
+
+            self.skaterDict[i_skater] = skater(i_skater,
+                                               seed=seed,
+                                               name=skaterName,
+                                               team=team,
+                                               ageCategory=ageCategory)
+
+        heatDict = self._randomSearch(max_attempts,
+                                      adjustAfterNAttempts,
+                                      encounterFlexibility,
+                                      verbose)
+        if len(heatDict) == 0:
+            return heatDict
+        if self.shift > 1 or encounterFlexibility > 1:
             print(
                 'WARNING! Some skaters may have noticably fewer encounters than others.')
             if self.printDetails:
                 self.buildHeatsLogger.info(
-                    'WARNING! Some skaters may have noticably fewer encounters than others. Shift = %s', shift)
-
+                    'WARNING! Some skaters may have noticably fewer encounters than others. Shift = %s, EncounterFlexibility = %s', self.shift, encounterFlexibility)
         heatSpacing = self.spaceHeatsOut(heatDict)
         if len(heatSpacing) == 0:
             print(
@@ -422,7 +684,6 @@ class raceProgram():
                 self.buildHeatsLogger.info(
                     'Optimal heat order: %s', heatSpacing)
                 self.buildHeatsLogger.info('Heats will be renumbered...')
-
             self.heatOrder = [x for x in heatSpacing if isinstance(x, int)]
             heatDict_ = {}
             for skater_ in self.skaterDict.values():
@@ -662,3 +923,134 @@ class raceProgram():
                 break
             concludedHeats_.append('Pause')
         return concludedHeats_
+
+    def _gradOpt(self,
+                 verbose: bool = True):
+        """ Don't use this, it does not work yet """
+        maxTheoreticalMatrixDims = (max(
+            self.totalSkaters*(self.totalSkaters - 1)//4, self.numRacesPerSkater*2), self.heatSize*2)
+        initM = initializeMatrix(self.totalSkaters,
+                                 self.numRacesPerSkater,
+                                 self.heatSize,
+                                 maxTheoreticalMatrixDims)
+        skaterNums = list(range(self.totalSkaters))
+        averageSeeding = float(self.totalSkaters + 1) / 2.0
+        sampleStdDev = np.std(skaterNums)/np.sqrt(self.heatSize)
+
+        conTests = convergenceTests(minHeatSize=self.minHeatSize,
+                                    verbose=verbose,
+                                    printDetails=self.printDetails,
+                                    averageSeeding=averageSeeding,
+                                    numRacesPerSkater=self.numRacesPerSkater,
+                                    sampleStdDev=sampleStdDev)
+        for i in range(initM.shape[0]):
+            if all((x == -1 for x in initM[i, :])):
+                break
+        # initM = initM[:i+1, :min(self.heatSize+3, self.heatSize*2)]
+        initM = initM[:i+2, :]
+        maxTheoreticalMatrixDims = initM.shape
+        initPot = self.heatPotentialCalc(
+            initM.flatten(), maxTheoreticalMatrixDims)
+        print(initPot)
+        n_encounterErrors = 0
+        n_seedingErrors = 0
+        n_appearancesErrors = 0
+        shift = 1
+        heatDict = None
+        for n_attempts in range(100):
+            if heatDict is not None:
+                print(heatDict)
+            direc = [0]*len(initM.flatten())
+            upOrDown = [-1, 1]
+            for i, elem in enumerate(initM.flatten()):
+                shuffle(upOrDown)
+                direc[i] = upOrDown[0]
+                if elem <= 0:
+                    direc[i] = 1
+                if elem >= self.totalSkaters - 1:
+                    direc[i] = -1
+            direc = np.diag(direc)
+
+            res = minimize(self.heatPotentialCalc,
+                           initM.flatten(),
+                           args=(maxTheoreticalMatrixDims,),
+                           tol=100.0,
+                           method='Powell',
+                           options={'disp': True,
+                                    'return_all': True,
+                                    # 'direc': direc,
+                                    'maxiter': 1000})
+            out = np.rint(res.x.reshape(maxTheoreticalMatrixDims)).astype(int)
+            initM = out
+            col0 = initM[:, n_attempts % self.heatSize]
+            np.random.shuffle(col0)
+            initM[:, n_attempts % self.heatSize] = col0
+            heatDict = {}
+            for i, row in enumerate(out):
+                outRow = row[(row >= 0) & (row < self.totalSkaters)]
+                if len(outRow) > 0:
+                    outRow = list(set(outRow.tolist()))
+                    heatDict[i+1] = {}
+                    heatDict[i+1] = {'heat': outRow}
+                    heatDict[i+1]['averageSeeding'] = 0
+                    for skaterNum in outRow:
+                        if skaterNum in self.skaterDict.keys():
+                            heatDict[i+1]['averageSeeding'] += self.skaterDict[skaterNum].seed
+                    heatDict[i+1]['averageSeeding'] /= len(outRow)
+            for heatNum, subDict in heatDict.items():
+                heatAsList = subDict['heat']
+                for skIndex, skNum in enumerate(heatAsList):
+                    self.skaterDict[skNum].addHeatAppearance(heatNum)
+                    for skNum_0 in heatAsList[skIndex+1:]:
+                        self.skaterDict[skNum].addEncounterFlexible(skNum_0)
+                        self.skaterDict[skNum_0].addEncounterFlexible(skNum)
+
+            tr = conTests.heatLengthTest(heatDict,
+                                         n_attempts,
+                                         logger=self.buildHeatsLogger)
+            if tr == 0:
+                for skater_ in self.skaterDict.values():
+                    skater_.removeAllHeatAppearances()
+                    skater_.removeAllEncounters()
+                continue
+
+            tr, n_appearancesErrors = conTests.appearanceTest(n_appearancesErrors,
+                                                              self.skaterDict,
+                                                              n_attempts,
+                                                              logger=self.buildHeatsLogger)
+            if tr == 0:
+                for skater_ in self.skaterDict.values():
+                    skater_.removeAllHeatAppearances()
+                    skater_.removeAllEncounters()
+                continue
+            n_attempts += 1
+            tr, n_encounterErrors = conTests.encounterTest(n_encounterErrors,
+                                                           shift,
+                                                           self.skaterDict,
+                                                           n_attempts,
+                                                           logger=self.buildHeatsLogger)
+            self.n_encounterErrors = n_encounterErrors
+            if tr == 0:
+                shift += 1
+                for skater_ in self.skaterDict.values():
+                    skater_.removeAllHeatAppearances()
+                    skater_.removeAllEncounters()
+                continue
+            if self.considerSeeding:
+                tr, n_seedingErrors = conTests.seedingTest(n_seedingErrors,
+                                                           heatDict,
+                                                           n_attempts,
+                                                           logger=self.buildHeatsLogger)
+                if tr == 0:
+                    for skater_ in self.skaterDict.values():
+                        skater_.removeAllHeatAppearances()
+                        skater_.removeAllEncounters()
+                    continue
+            if self.fairStartLanes:
+                self.makeStartLanesFair(heatDict)
+            print('Success after {} attempts.'.format(n_attempts))
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'Success after %s attempts.', n_attempts)
+            return heatDict
+        return {}
