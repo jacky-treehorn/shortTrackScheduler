@@ -724,6 +724,46 @@ class raceProgram():
 
         return heatDict
 
+    def modifyHeat(self,
+                   heatId,
+                   elementId,
+                   task: str = 'remove',
+                   addPosition: int = 0):
+        """This should be run after build_heats in the case a
+        participant withdraws or if a participant should
+        be added to a heat."""
+        if elementId in self.skaterDict.keys():
+            if heatId in self.heatDict.keys():
+                if 'heat' in self.heatDict[heatId].keys():
+                    if elementId in self.heatDict[heatId]['heat']:
+                        if task == 'remove':
+                            self.heatDict[heatId]['heat'].remove(elementId)
+                            if elementId in self.skaterDict.keys():
+                                self.skaterDict[elementId].removeHeatAppearance(
+                                    heatId)
+                                for skaterNum_0 in self.heatDict[heatId]['heat']:
+                                    if skaterNum_0 != elementId:
+                                        self.skaterDict[elementId].removeEncounterFlexible(
+                                            skaterNum_0)
+                                        self.skaterDict[skaterNum_0].removeEncounterFlexible(
+                                            elementId)
+                    else:
+                        if task == 'add':
+                            if 0 <= addPosition <= len(self.heatDict[heatId]['heat']):
+                                self.heatDict[heatId]['heat'].insert(addPosition,
+                                                                     elementId)
+                            else:
+                                self.heatDict[heatId]['heat'].append(
+                                    elementId, addPosition)
+                            self.skaterDict[elementId].addHeatAppearance(
+                                heatId)
+                            for skaterNum_0 in self.heatDict[heatId]['heat']:
+                                if skaterNum_0 != elementId:
+                                    self.skaterDict[elementId].addEncounterFlexible(
+                                        skaterNum_0)
+                                    self.skaterDict[skaterNum_0].addEncounterFlexible(
+                                        elementId)
+
     def reorganizeHeats(self, heatDict: dict):
         """ Randomly removes a competitor from each heat. """
         removedSkaterDict = {}
