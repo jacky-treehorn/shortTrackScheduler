@@ -7,14 +7,13 @@ Created on Tue Feb 22 20:41:04 2022
 # pylint: disable=invalid-name
 import os
 from datetime import datetime
-from random import Random
+from random import Random, shuffle
 import copy
 import json
 import logging
 from participant import skater
 import numpy as np
 import pandas as pd
-from random import shuffle
 from scipy.optimize import minimize
 
 
@@ -78,6 +77,129 @@ def kroneckerDelta(x: int,
     return float(out)
 
 
+def NCAdd(a: int, b: int, s: int) -> int:
+    n = 0
+    c = 0
+    while (a > 0 or b > 0):
+        c += (((a % s) + (b % s)) % s)*s**n
+        n += 1
+        a = a // s
+        b = b // s
+    return c
+
+
+def recommendedSeedingOrder(heatMatrix: np.array,
+                            heatIds: list) -> list:
+    B_in = np.zeros_like(heatMatrix, dtype=np.float64)
+    val, counts = np.unique(heatMatrix.flatten(), return_counts=True)
+    valCounts = dict(zip(val, counts))
+    for heatId in heatIds:
+        if heatId in valCounts.keys():
+            n_heatIdsInHeatMatrix = valCounts[heatId]
+            B_in += np.where(heatMatrix == heatId, np.ones_like(heatMatrix),
+                             np.zeros_like(heatMatrix))*(1/n_heatIdsInHeatMatrix)
+    # make B square, either pad or cut.
+    B = B_in
+    if B_in.shape[1] < B_in.shape[0]:
+        X0 = np.zeros((B_in.shape[0], B_in.shape[0] - B_in.shape[1]))
+        B = np.hstack((B, X0))
+    if B_in.shape[1] > B_in.shape[0]:
+        B = B[:, :B_in.shape[0]]
+    B = B.transpose()
+    B_p = np.linalg.pinv(B)
+    # colToKeep = []
+    # for col in range(B_in.shape[1]):
+    #     if all((x == 0.0 for x in B_in[:, col])):
+    #         continue
+    #     colToKeep.append(col)
+    # B_in = B_in[:, colToKeep]
+
+    # solve perturbatively
+
+    epsilon = 1/B.shape[0]
+
+    w, v = np.linalg.eig(B)
+    x_init = np.zeros_like(v[:, -1])
+    stdEvecMax = 0.0
+    for i, w_ in enumerate(w):
+        if np.abs(w_) < 1e-9:
+            if np.std(v[:, i]) > stdEvecMax:
+                stdEvecMax = np.std(v[:, i])
+                x_init = v[:, i]
+    x = [x_init]
+    for _ in range(1, 10):
+        x.append(-np.matmul(B_p, x[-1]))
+    out = x[0]
+    for j, vec in enumerate(x[1:]):
+        out += vec*epsilon**(j+1)
+    ser = pd.Series(np.abs(out))
+    ser.sort_values(inplace=True)
+    return ser.index.tolist()
+
+
+class socialGolferProblem():
+
+    def __init__(self,
+                 n_participants: int,
+                 heatSize: int):
+        self.n_participants = n_participants
+        self.heatSize = heatSize
+        self.n_power = 0
+        while (self.heatSize**self.n_power < self.n_participants):
+            self.n_power += 1
+
+    def distanceToNext(self) -> list:
+        out = []
+        for nn in range(1, self.n_power+1):
+            for m in range(self.heatSize**(nn-1)):
+                out.append(self.heatSize**(nn - 1) + m)
+        return out
+
+    def groupAssignment(self) -> np.array:
+        bt = np.zeros((self.heatSize**self.n_power,
+                      (self.heatSize**self.n_power - 1)//(self.heatSize - 1)))
+        rval = self.distanceToNext()
+        for j in range((self.heatSize**self.n_power - 1)//(self.heatSize - 1)):
+            for g in range(1, 1 + self.heatSize**(self.n_power - 1)):
+                i = np.where(bt[:, j] == 0)[0][0]
+                for x in range(self.heatSize):
+                    bt[i, j] = g
+                    i = NCAdd(i, rval[j], self.heatSize)
+        return bt.astype(int)
+
+    def sgpMatrixToHeats(self,
+                         sgpMatrix: np.array) -> np.array:
+        heats = {}
+        heatMatrix = []
+        column = []
+        initLength = 0
+        for col in range(sgpMatrix.shape[1]):
+            for person in range(sgpMatrix.shape[0]):
+                if person >= self.n_participants:
+                    continue
+                hKey = int(sgpMatrix[person, col]+col*self.heatSize)
+                if hKey in heats.keys():
+                    if person in heats[hKey]:
+                        continue
+                    if len(heats[hKey]) >= self.heatSize + 1:
+                        continue
+                column.append(hKey)
+                if hKey in heats.keys():
+                    heats[hKey].append(person)
+                else:
+                    heats[hKey] = [person]
+                if col > 0:
+                    if len(column) >= initLength:
+                        heatMatrix.append(column)
+                        column = []
+                        break
+            if col == 0:
+                initLength = len(column)
+                heatMatrix.append(column)
+                column = []
+        return np.asarray(heatMatrix).transpose()
+
+
 class convergenceTests():
 
     def __init__(self,
@@ -106,7 +228,7 @@ class convergenceTests():
                     n_attempts))
             if self.printDetails:
                 if logger is not None:
-                    logger.info(
+                    logger.error(
                         'heatSizeError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
             return 0
         if any((len(heat_['heat']) != len(set(heat_['heat'])) for heat_ in heatDict.values())):
@@ -115,7 +237,7 @@ class convergenceTests():
                     n_attempts))
             if self.printDetails:
                 if logger is not None:
-                    logger.info(
+                    logger.error(
                         'heatUniquenessError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
             return 0
         return 1
@@ -131,7 +253,7 @@ class convergenceTests():
                     n_attempts))
             if self.printDetails:
                 if logger is not None:
-                    logger.info(
+                    logger.error(
                         'totalAppearancesError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
             n_appearancesErrors += 1
             return 0, n_appearancesErrors
@@ -158,7 +280,7 @@ class convergenceTests():
                     n_attempts))
             if self.printDetails:
                 if logger is not None:
-                    logger.info(
+                    logger.error(
                         'encountersError: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
             return 0, n_encounterErrors
         return 1, n_encounterErrors
@@ -178,7 +300,7 @@ class convergenceTests():
                 print('seedingErrors: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                     n_attempts))
             if self.printDetails:
-                logger.info(
+                logger.error(
                     'seedingErrors: Attempt %s produced an unfavourable Heat structure, modifying...', n_attempts)
             return 0, n_seedingErrors
         return 1, n_seedingErrors
@@ -630,8 +752,8 @@ class raceProgram():
                    verbose: bool = True,
                    method: str = 'random_search') -> dict:
         """ Calculates a heat structure """
-        assert method in ['random_search', 'gradopt'], 'method must be either {}'.format(
-            ['random_search', 'gradopt'])
+        assert method in ['sgp', 'gradopt'], 'method must be either {}'.format(
+            ['random_search', 'sgp'])
         adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
         if self.numRacesPerSkater == 0:
             while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
@@ -655,26 +777,41 @@ class raceProgram():
                                                name=skaterName,
                                                team=team,
                                                ageCategory=ageCategory)
+        if method == 'random_search':
+            heatDict = self._randomSearch(max_attempts,
+                                          adjustAfterNAttempts,
+                                          encounterFlexibility,
+                                          verbose)
+        if method == 'sgp':
+            if self.considerSeeding:
+                if verbose:
+                    print('WARNING: sgp is not very good at accounting for seeding!')
+                if self.printDetails:
+                    self.buildHeatsLogger.warning(
+                        'sgp is not very good at accounting for seeding!')
+            if self.fairStartLanes:
+                if verbose:
+                    print('WARNING: sgp is not very good at making start lanes fair!')
+                if self.printDetails:
+                    self.buildHeatsLogger.warning(
+                        'sgp is not very good at making start lanes fair!')
 
-        heatDict = self._randomSearch(max_attempts,
-                                      adjustAfterNAttempts,
-                                      encounterFlexibility,
-                                      verbose)
+            heatDict = self._sgp(verbose)
         if len(heatDict) == 0:
             return heatDict
         if self.shift > 1 or encounterFlexibility > 1:
             print(
                 'WARNING! Some skaters may have noticably fewer encounters than others.')
             if self.printDetails:
-                self.buildHeatsLogger.info(
-                    'WARNING! Some skaters may have noticably fewer encounters than others. Shift = %s, EncounterFlexibility = %s', self.shift, encounterFlexibility)
+                self.buildHeatsLogger.warning(
+                    'Some skaters may have noticably fewer encounters than others. Shift = %s, EncounterFlexibility = %s', self.shift, encounterFlexibility)
         heatSpacing = self.spaceHeatsOut(heatDict)
         if len(heatSpacing) == 0:
             print(
                 'WARNING!: No suitable heat spacing could be found.')
             if self.printDetails:
-                self.buildHeatsLogger.info(
-                    'WARNING!: No suitable heat spacing could be found.')
+                self.buildHeatsLogger.warning(
+                    'No suitable heat spacing could be found.')
         if len(heatSpacing) > 0:
             if verbose:
                 print('Optimal heat order: ', heatSpacing)
@@ -963,8 +1100,134 @@ class raceProgram():
             concludedHeats_.append('Pause')
         return concludedHeats_
 
+    def _sgp(self,
+             verbose: bool = True) -> dict:
+
+        sgp = socialGolferProblem(self.totalSkaters, self.heatSize)
+        out = sgp.groupAssignment()
+        M = sgp.sgpMatrixToHeats(out)
+        totalAttempts = 1
+        if self.considerSeeding:
+            totalAttempts = 2
+
+        for n_attempts in range(totalAttempts):
+            heats = {}
+            for col in range(out.shape[1]):
+                for person in range(out.shape[0]):
+                    if person >= self.totalSkaters:
+                        break
+                    hKey = int(out[person, col]+col*self.heatSize)
+                    if person in self.skaterDict.keys():
+                        if self.skaterDict[person].totalAppearances >= self.numRacesPerSkater:
+                            continue
+                    if hKey in heats.keys():
+                        if person in heats[hKey]['heat']:
+                            continue
+                        if len(heats[hKey]['heat']) >= self.heatSize + 1:
+                            continue
+                    self.skaterDict[person].addHeatAppearance(hKey)
+                    if hKey in heats.keys():
+                        heats[hKey]['heat'].append(
+                            self.skaterDict[person].skaterNum)
+                    else:
+                        heats[hKey] = {'heat': [person],
+                                       'averageSeeding': 0}
+            smallHeats = []
+            heatToDelete = []
+            for hk, heat_ in heats.items():
+                heat = heat_['heat']
+                if len(heat) < self.minHeatSize:
+                    for skater_ in heat:
+                        self.skaterDict[skater_].removeHeatAppearance(hk)
+                    smallHeats += heat
+                    heatToDelete.append(hk)
+            for hk in heatToDelete:
+                del heats[hk]
+            initialHeatIds = []
+            for heatId, heat_ in heats.items():
+                initialHeatIds.append(heatId)
+                heat = heat_['heat']
+                for skater_i in heat:
+                    for skater_j in heat:
+                        if skater_i == skater_j:
+                            continue
+                        self.skaterDict[skater_i].addEncounterFlexible(
+                            skater_j)
+            if self.considerSeeding and n_attempts == 0:
+                recommendedSeeding = recommendedSeedingOrder(M, initialHeatIds)
+                oldDict = copy.copy(self.skaterDict)
+                seedDict = {}
+                seedsAsList = []
+                for skater_ in self.skaterDict.values():
+                    seedsAsList.append(skater_.seed)
+                    seedDict[skater_.seed] = skater_.skaterNum
+                skatersFromSeedList = [seedDict[x]
+                                       for x in sorted(seedsAsList)]
+                for i, sk8num in enumerate(recommendedSeeding):
+                    self.skaterDict[sk8num] = oldDict[skatersFromSeedList[i]]
+                    self.skaterDict[sk8num].skaterNum = sk8num
+                    self.skaterDict[sk8num].removeAllHeatAppearances()
+                    self.skaterDict[sk8num].removeAllEncounters()
+                continue
+            maxEncounters = 0
+            for skater_ in self.skaterDict.values():
+                if skater_.totalEncounters > maxEncounters:
+                    maxEncounters = skater_.totalEncounters
+            bestHeatForSkaterInSmallHeat = []
+            heatSizeOverhang = 0
+            while len(bestHeatForSkaterInSmallHeat) < len(smallHeats):
+                heatSizeOverhang += 1
+                if all((skater_.totalEncounters >= maxEncounters for skater_ in self.skaterDict.values())):
+                    maxEncounters += 1
+                for skater_ in smallHeats:
+                    n_maxEncounters = np.iinfo(int).max
+                    bestHeat = None
+                    for hk, heat_ in heats.items():
+                        heat = heat_['heat']
+                        if skater_ in heat:
+                            continue
+                        if len(heat) >= self.heatSize + heatSizeOverhang:
+                            continue
+                        if any((self.skaterDict[skater_x].totalEncounters >= maxEncounters for skater_x in heat)):
+                            continue
+                        n_enc = 0
+                        otherEncounters = 0
+                        for other in heat:
+                            if other in self.skaterDict[skater_].encounters:
+                                n_enc += 1
+                            otherEncounters += self.skaterDict[other].totalEncounters
+                        n_enc = n_enc*otherEncounters
+                        if n_enc < n_maxEncounters and hk not in bestHeatForSkaterInSmallHeat:
+                            bestHeat = hk
+                            bestHeatForSkaterInSmallHeat.append(bestHeat)
+                            n_maxEncounters = n_enc
+                    if bestHeat is None:
+                        continue
+                    heat = heats[bestHeat]['heat']
+                    heat.append(skater_)
+                    self.skaterDict[skater_].addHeatAppearance(bestHeat)
+                    for skater_i in heat:
+                        if skater_i == skater_:
+                            continue
+                        self.skaterDict[skater_i].addEncounterFlexible(skater_)
+                        self.skaterDict[skater_].addEncounterFlexible(skater_i)
+            for hk, heat_ in heats.items():
+                heat = heat_['heat']
+                for skater_ in heat:
+                    heat_['averageSeeding'] += self.skaterDict[skater_].seed
+                heat_['averageSeeding'] /= len(heat)
+
+            if self.fairStartLanes:
+                self.makeStartLanesFair(heats)
+            print('Success after {} attempts.'.format(n_attempts))
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'Success after %s attempts.', n_attempts)
+            return heats
+        return {}
+
     def _gradOpt(self,
-                 verbose: bool = True):
+                 verbose: bool = True) -> dict:
         """ Don't use this, it does not work yet """
         maxTheoreticalMatrixDims = (max(
             self.totalSkaters*(self.totalSkaters - 1)//4, self.numRacesPerSkater*2), self.heatSize*2)
@@ -1059,7 +1322,6 @@ class raceProgram():
                     skater_.removeAllHeatAppearances()
                     skater_.removeAllEncounters()
                 continue
-            n_attempts += 1
             tr, n_encounterErrors = conTests.encounterTest(n_encounterErrors,
                                                            shift,
                                                            self.skaterDict,
