@@ -579,8 +579,28 @@ class raceProgram():
         n_seedingErrors = 0
         n_appearancesErrors = 0
         n_appearanceErrorsResets = 0
+        numRacesPerSkater_shift = -1
         shift = 0
         while True:
+            if n_appearanceErrorsResets > 10:
+                n_appearanceErrorsResets = 0
+
+                self.numRacesPerSkater += numRacesPerSkater_shift
+                if self.numRacesPerSkater <= 1:
+                    numRacesPerSkater_shift = 1
+                    self.numRacesPerSkater += 2
+                if verbose:
+                    print('Changing numRacesPerSkater: {}'.format(
+                        self.numRacesPerSkater))
+                if self.printDetails:
+                    self.buildHeatsLogger.warning(
+                        'Changing numRacesPerSkater %s', self.numRacesPerSkater)
+                conTests = convergenceTests(minHeatSize=self.minHeatSize,
+                                            verbose=verbose,
+                                            printDetails=self.printDetails,
+                                            averageSeeding=self.averageSeeding,
+                                            numRacesPerSkater=self.numRacesPerSkater,
+                                            sampleStdDev=self.sampleStdDev)
             if n_appearancesErrors > adjustAfterNAttempts:
                 n_appearancesErrors = 0
                 n_appearanceErrorsResets += 1
@@ -741,7 +761,7 @@ class raceProgram():
             if self.printDetails:
                 self.buildHeatsLogger.info(
                     'Success after %s attempts.', n_attempts)
-                break
+            break
         self.shift = shift
         return heatDict
 
@@ -752,7 +772,7 @@ class raceProgram():
                    verbose: bool = True,
                    method: str = 'random_search') -> dict:
         """ Calculates a heat structure """
-        assert method in ['sgp', 'gradopt'], 'method must be either {}'.format(
+        assert method in ['sgp', 'random_search'], 'method must be either {}'.format(
             ['random_search', 'sgp'])
         adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
         if self.numRacesPerSkater == 0:
@@ -924,6 +944,13 @@ class raceProgram():
                            heatDict: dict,
                            verbose: bool = True):
         """ Does what it says """
+        if len(heatDict) == 0:
+            if verbose:
+                print('ERROR makeStartLanesFair: heatDict is emptpy!')
+            if self.printDetails:
+                self.buildHeatsLogger.error(
+                    'makeStartLanesFair: heatDict is emptpy!')
+            return
         skaterDict = {}
         for heatNum, heat in heatDict.items():
             for lane, skater_ in enumerate(heat['heat']):
@@ -936,8 +963,8 @@ class raceProgram():
                 else:
                     skaterDict[skater_] = {'values': [value]}
                     skaterDict[skater_]['heatNum'] = [heatNum]
-        mostDisadvantagedSkater = 0
-        mostAdvantagedSkater = 0
+        mostDisadvantagedSkater = min(list(skaterDict.keys()))
+        mostAdvantagedSkater = min(list(skaterDict.keys()))
         worstValue = self._laneAverage*float(self.heatSize)*100
         bestValue = 0
         allValues = []
@@ -1107,31 +1134,76 @@ class raceProgram():
         out = sgp.groupAssignment()
         M = sgp.sgpMatrixToHeats(out)
         totalAttempts = 1
+        numRacesPerSkater_shift = -1
         if self.considerSeeding:
             totalAttempts = 2
 
         for n_attempts in range(totalAttempts):
             heats = {}
-            for col in range(out.shape[1]):
-                for person in range(out.shape[0]):
-                    if person >= self.totalSkaters:
-                        break
-                    hKey = int(out[person, col]+col*self.heatSize)
-                    if person in self.skaterDict.keys():
-                        if self.skaterDict[person].totalAppearances >= self.numRacesPerSkater:
-                            continue
-                    if hKey in heats.keys():
-                        if person in heats[hKey]['heat']:
-                            continue
-                        if len(heats[hKey]['heat']) >= self.heatSize + 1:
-                            continue
-                    self.skaterDict[person].addHeatAppearance(hKey)
-                    if hKey in heats.keys():
-                        heats[hKey]['heat'].append(
-                            self.skaterDict[person].skaterNum)
-                    else:
-                        heats[hKey] = {'heat': [person],
-                                       'averageSeeding': 0}
+            usedHKs = []
+            hsTol = 1
+            while any((skater_.totalAppearances < self.numRacesPerSkater for skater_ in self.skaterDict.values())):
+                luhk = len(usedHKs)
+                for col in range(out.shape[1]):
+                    for person in range(out.shape[0]):
+                        if person >= self.totalSkaters:
+                            break
+                        # +hkeyIterator*self.heatSize)
+                        hKey = int(out[person, col])
+                        if hKey in usedHKs:
+                            hKey += (usedHKs.count(hKey) //
+                                     self.heatSize)*self.heatSize
+                        if person in self.skaterDict.keys():
+                            if self.skaterDict[person].totalAppearances >= self.numRacesPerSkater:
+                                continue
+                        if hKey in heats.keys():
+                            if person in heats[hKey]['heat']:
+                                continue
+                            if len(heats[hKey]['heat']) >= self.heatSize + hsTol:
+                                continue
+                        self.skaterDict[person].addHeatAppearance(hKey)
+                        if hKey in heats.keys():
+                            heats[hKey]['heat'].append(
+                                self.skaterDict[person].skaterNum)
+                        else:
+                            heats[hKey] = {'heat': [person],
+                                           'averageSeeding': 0}
+                        usedHKs.append(int(out[person, col]))
+                if len(usedHKs) == luhk:
+                    hsTol += 1
+                if hsTol >= 4:
+                    self.numRacesPerSkater += numRacesPerSkater_shift
+                    if self.numRacesPerSkater <= 1:
+                        numRacesPerSkater_shift = 1
+                        self.numRacesPerSkater += 2
+                    if verbose:
+                        print('Changing numRacesPerSkater: {}'.format(
+                            self.numRacesPerSkater))
+                    if self.printDetails:
+                        self.buildHeatsLogger.warning(
+                            'Changing numRacesPerSkater %s', self.numRacesPerSkater)
+                    for skater_ in self.skaterDict.values():
+                        skater_.removeAllHeatAppearances()
+                    heats = {}
+                    usedHKs = []
+                    hsTol = 1
+                    if verbose:
+                        print(
+                            'WARNING! no good configuration for numRacesPerSkater, reducing...')
+                    if self.printDetails:
+                        self.buildHeatsLogger.warning(
+                            'No good configuration for numRacesPerSkater, reducing.')
+            # remap keys, the ordering is not necessarily sequential:
+            allHeatKeys = sorted(list(heats.keys()))
+            tempHeats = copy.copy(heats)
+            heats = {}
+            for i, key in enumerate(allHeatKeys):
+                if i+min(allHeatKeys) != key:
+                    for skaterNum in tempHeats[key]['heat']:
+                        self.skaterDict[skaterNum].removeHeatAppearance(key)
+                        self.skaterDict[skaterNum].addHeatAppearance(
+                            i+min(allHeatKeys))
+                heats[i+min(allHeatKeys)] = tempHeats[key]
             smallHeats = []
             heatToDelete = []
             for hk, heat_ in heats.items():
@@ -1174,18 +1246,22 @@ class raceProgram():
                 if skater_.totalEncounters > maxEncounters:
                     maxEncounters = skater_.totalEncounters
             bestHeatForSkaterInSmallHeat = []
-            heatSizeOverhang = 0
-            while len(bestHeatForSkaterInSmallHeat) < len(smallHeats):
-                heatSizeOverhang += 1
-                if all((skater_.totalEncounters >= maxEncounters for skater_ in self.skaterDict.values())):
-                    maxEncounters += 1
+            heatSizeOverhang = 1
+            n_skatersToReplace = len(smallHeats)
+            while len(bestHeatForSkaterInSmallHeat) < n_skatersToReplace:
+                # if all((skater_.totalEncounters >= maxEncounters for skater_ in self.skaterDict.values())):
+                #     maxEncounters += 1
+                emplacedSkaters = []
                 for skater_ in smallHeats:
                     n_maxEncounters = np.iinfo(int).max
                     bestHeat = None
+                    appearsInHeat = []
                     for hk, heat_ in heats.items():
                         heat = heat_['heat']
                         if skater_ in heat:
+                            appearsInHeat.append(True)
                             continue
+                        appearsInHeat.append(False)
                         if len(heat) >= self.heatSize + heatSizeOverhang:
                             continue
                         if any((self.skaterDict[skater_x].totalEncounters >= maxEncounters for skater_x in heat)):
@@ -1197,13 +1273,14 @@ class raceProgram():
                                 n_enc += 1
                             otherEncounters += self.skaterDict[other].totalEncounters
                         n_enc = n_enc*otherEncounters
-                        if n_enc < n_maxEncounters and hk not in bestHeatForSkaterInSmallHeat:
+                        if n_enc < n_maxEncounters:
                             bestHeat = hk
-                            bestHeatForSkaterInSmallHeat.append(bestHeat)
                             n_maxEncounters = n_enc
                     if bestHeat is None:
                         continue
+                    bestHeatForSkaterInSmallHeat.append(bestHeat)
                     heat = heats[bestHeat]['heat']
+                    emplacedSkaters.append(skater_)
                     heat.append(skater_)
                     self.skaterDict[skater_].addHeatAppearance(bestHeat)
                     for skater_i in heat:
@@ -1211,6 +1288,11 @@ class raceProgram():
                             continue
                         self.skaterDict[skater_i].addEncounterFlexible(skater_)
                         self.skaterDict[skater_].addEncounterFlexible(skater_i)
+                if len(emplacedSkaters) == 0:
+                    maxEncounters += 1
+                    heatSizeOverhang += 1
+                for skater_ in emplacedSkaters:
+                    smallHeats.remove(skater_)
             for hk, heat_ in heats.items():
                 heat = heat_['heat']
                 for skater_ in heat:
@@ -1223,6 +1305,18 @@ class raceProgram():
             if self.printDetails:
                 self.buildHeatsLogger.info(
                     'Success after %s attempts.', n_attempts)
+            longestHeatLength = 0
+            for heatNum, heat in heats.items():
+                if len(heat['heat']) > longestHeatLength:
+                    longestHeatLength = len(heat['heat'])
+            heatAsArray = np.zeros((len(heats), longestHeatLength))
+            for heatInd, heat in enumerate(heats.values()):
+                heatAsArray[heatInd, :len(heat['heat'])] = heat['heat']
+            heatScore = self.heatPotentialCalc(heatAsArray, heatAsArray.shape)
+            if verbose:
+                print('Heat Score: {}'.format(heatScore))
+            if self.printDetails:
+                self.buildHeatsLogger.info('Heat Score: %s', heatScore)
             return heats
         return {}
 
