@@ -579,16 +579,22 @@ class raceProgram():
         n_seedingErrors = 0
         n_appearancesErrors = 0
         n_appearanceErrorsResets = 0
+        numRacesPerSkater_shift = -1
         shift = 0
         while True:
             if n_appearanceErrorsResets > 10:
                 n_appearanceErrorsResets = 0
+
+                self.numRacesPerSkater += numRacesPerSkater_shift
+                if self.numRacesPerSkater <= 1:
+                    numRacesPerSkater_shift = 1
+                    self.numRacesPerSkater += 2
                 if verbose:
-                    print('Reducing numRacesPerSkater')
+                    print('Changing numRacesPerSkater: {}'.format(
+                        self.numRacesPerSkater))
                 if self.printDetails:
                     self.buildHeatsLogger.warning(
-                        'Reducing numRacesPerSkater')
-                self.numRacesPerSkater -= 1
+                        'Changing numRacesPerSkater %s', self.numRacesPerSkater)
                 conTests = convergenceTests(minHeatSize=self.minHeatSize,
                                             verbose=verbose,
                                             printDetails=self.printDetails,
@@ -1128,6 +1134,7 @@ class raceProgram():
         out = sgp.groupAssignment()
         M = sgp.sgpMatrixToHeats(out)
         totalAttempts = 1
+        numRacesPerSkater_shift = -1
         if self.considerSeeding:
             totalAttempts = 2
 
@@ -1165,7 +1172,16 @@ class raceProgram():
                 if len(usedHKs) == luhk:
                     hsTol += 1
                 if hsTol >= 4:
-                    self.numRacesPerSkater -= 1
+                    self.numRacesPerSkater += numRacesPerSkater_shift
+                    if self.numRacesPerSkater <= 1:
+                        numRacesPerSkater_shift = 1
+                        self.numRacesPerSkater += 2
+                    if verbose:
+                        print('Changing numRacesPerSkater: {}'.format(
+                            self.numRacesPerSkater))
+                    if self.printDetails:
+                        self.buildHeatsLogger.warning(
+                            'Changing numRacesPerSkater %s', self.numRacesPerSkater)
                     for skater_ in self.skaterDict.values():
                         skater_.removeAllHeatAppearances()
                     heats = {}
