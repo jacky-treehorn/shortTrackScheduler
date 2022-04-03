@@ -422,11 +422,30 @@ class raceProgram():
             for folderToDelete in foldersToDelete:
                 os.rmdir(folderToDelete)
 
+    def handleYellowCards(self,
+                          yellowCards: list,
+                          heatId: int):
+        for skaterNum in yellowCards:
+            allHeats = list(self.heatDict.keys())
+            for heatNum in allHeats:
+                if heatNum > heatId:
+                    while skaterNum in self.heatDict[heatNum]['heat']:
+                        self.heatDict[heatNum]['heat'].remove(skaterNum)
+                        for otherSkater in self.heatDict[heatNum]['heat']:
+                            self.skaterDict[otherSkater].removeEncounterFlexible(
+                                skaterNum)
+            self.skaterDict[skaterNum].yellowCard = True
+        # Reset all points, encounters etc. will be recalculated.:
+        for skater_ in self.skaterDict.values():
+            skater_.points = 0
+            skater_.cumulativeEncounters = 0
+
     def buildResultsTable(self,
                           intermediate: bool = False,
                           intermediatePrint: bool = False,
                           verbose: bool = True,
-                          heatId: str = '0'):
+                          heatId: str = '0',
+                          hidePoints: bool = True):
         """ Calculates the results of all the competitors """
         for skater_ in self.skaterDict.values():
             skater_.averageResults()
@@ -441,11 +460,15 @@ class raceProgram():
                            'bestTime': skater_.bestTime,
                            'skaterName': skater_.name,
                            'skaterTeam': skater_.team,
-                           'encounters': skater_.cumulativeEncounters})
+                           'encounters': skater_.cumulativeEncounters,
+                           'points': skater_.points})
         ranking = pd.DataFrame(dfList)
         self.resultsTable = ranking[ranking['encounters'] > 0].sort_values(by=['rating', 'bestTime'],
                                                                            ascending=[False, True])
-        self.resultsTable.drop(columns=['encounters'], inplace=True)
+        dropCols = ['encounters']
+        if hidePoints:
+            dropCols.append('points')
+        self.resultsTable.drop(columns=dropCols, inplace=True)
         if verbose:
             print('Rankings')
             print(self.resultsTable)
@@ -1193,17 +1216,6 @@ class raceProgram():
                     if self.printDetails:
                         self.buildHeatsLogger.warning(
                             'No good configuration for numRacesPerSkater, reducing.')
-            # remap keys, the ordering is not necessarily sequential:
-            allHeatKeys = sorted(list(heats.keys()))
-            tempHeats = copy.copy(heats)
-            heats = {}
-            for i, key in enumerate(allHeatKeys):
-                if i+min(allHeatKeys) != key:
-                    for skaterNum in tempHeats[key]['heat']:
-                        self.skaterDict[skaterNum].removeHeatAppearance(key)
-                        self.skaterDict[skaterNum].addHeatAppearance(
-                            i+min(allHeatKeys))
-                heats[i+min(allHeatKeys)] = tempHeats[key]
             smallHeats = []
             heatToDelete = []
             for hk, heat_ in heats.items():
@@ -1215,6 +1227,17 @@ class raceProgram():
                     heatToDelete.append(hk)
             for hk in heatToDelete:
                 del heats[hk]
+            # remap keys, the ordering is not necessarily sequential:
+            allHeatKeys = sorted(list(heats.keys()))
+            tempHeats = copy.copy(heats)
+            heats = {}
+            for i, key in enumerate(allHeatKeys):
+                if i+min(allHeatKeys) != key:
+                    for skaterNum in tempHeats[key]['heat']:
+                        self.skaterDict[skaterNum].removeHeatAppearance(key)
+                        self.skaterDict[skaterNum].addHeatAppearance(
+                            i+min(allHeatKeys))
+                heats[i+min(allHeatKeys)] = tempHeats[key]
             initialHeatIds = []
             for heatId, heat_ in heats.items():
                 initialHeatIds.append(heatId)
