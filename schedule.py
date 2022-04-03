@@ -445,7 +445,7 @@ class raceProgram():
                           intermediatePrint: bool = False,
                           verbose: bool = True,
                           heatId: str = '0',
-                          hidePoints=True):
+                          hidePoints: bool = True):
         """ Calculates the results of all the competitors """
         for skater_ in self.skaterDict.values():
             skater_.averageResults()
