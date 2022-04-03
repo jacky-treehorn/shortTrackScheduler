@@ -17,8 +17,8 @@ class pointsAllocation():
                  ratingMaximum: float = 100.0,
                  verbose: bool = False,
                  pointsScheme: str = 'linear',
-                 nonFinishPlacings: list = ['a', 'p', 'dns', 'dnf'],
-                 noTimePlacings: list = ['p', 'dns', 'dnf']):
+                 nonFinishPlacings: list = ['a', 'p', 'dns', 'dnf', 'y'],
+                 noTimePlacings: list = ['p', 'dns', 'dnf', 'y']):
         self.ratingMaximum = ratingMaximum
         self.skatersDict = skatersDict
         self.verbose = verbose
@@ -36,6 +36,7 @@ class pointsAllocation():
             heatSize) + self.nonFinishPlacings
         self.defaultPointsGenerator = lambda heatSize: dict(zip(self.standardPlacings(
             heatSize), [self.pointsGenerator(x, heatSize) for x in self.standardPlacings(heatSize)]))
+        self.cumulativeResults = []
 
     def _checkPlausiblePlacings(self,
                                 heatResult: dict):
@@ -123,18 +124,33 @@ class pointsAllocation():
     def allocatePoints(self,
                        heatResult: dict,
                        heatTimes: dict,
-                       heatNum: int):
+                       heatNum: int) -> list:
+        '''Allocates points after each heat.'''
         for skaterNum, result in heatResult.items():
             self.skatersDict[skaterNum].addHeatTime(heatNum)
+            if result in self.noTimePlacings:
+                continue
             if skaterNum in heatTimes.keys():
                 self.skatersDict[skaterNum].addHeatTime(
                     heatNum, heatTimes[skaterNum])
+        yellowCards = []
+        if len(heatResult) <= 1:
+            return yellowCards
 
         self._checkPlausiblePlacings(heatResult)
         defaultPoints = self._getDefaultPoints(heatResult)
         n_encounters = max(0, len(heatResult) - 1)
+        if self.verbose:
+            print('\n')
+            print('heat: ', heatNum)
+            print('\n')
         for skaterNum, result in heatResult.items():
             if isinstance(result, str):
+                if result.lower() == 'y':
+                    yellowCards.append(skaterNum)
+                    if self.verbose:
+                        print(
+                            'Skater {0} receives 0 points. <-- YC'.format(skaterNum))
                 if self.verbose:
                     if result.lower() == 'p':
                         print(
@@ -150,11 +166,32 @@ class pointsAllocation():
                 self.skatersDict[skaterNum].points += defaultPoints[result]
         # Update each skater's running average
         for skaterNum in heatResult.keys():
+            if skaterNum in yellowCards:
+                continue
             self.skatersDict[skaterNum].updateRunningAverageResult(
                 n_encounters)
             if self.verbose:
-                print('Skater {0} rating: '.format(skaterNum),
-                      self.skatersDict[skaterNum].rating)
+                print('Skater {0} rating: {1}, points: {2}'.format(skaterNum,
+                                                                   self.skatersDict[skaterNum].rating,
+                                                                   self.skatersDict[skaterNum].points))
+        self.cumulativeResults.append({"heatResult": heatResult,
+                                       "heatTimes": heatTimes,
+                                       "heatNum": heatNum})
+        for yc in yellowCards:
+            for i, res in enumerate(self.cumulativeResults):
+                if yc in res["heatResult"].keys():
+                    if res["heatResult"][yc] not in self.nonFinishPlacings:
+                        hr = copy.copy(res["heatResult"])
+                        for skNum, res0 in hr.items():
+                            if res0 in self.nonFinishPlacings:
+                                continue
+                            if res0 > res["heatResult"][yc]:
+                                self.cumulativeResults[i]["heatResult"][skNum] -= 1
+                    # Turn yellow cards into penalties
+                    self.cumulativeResults[i]["heatResult"][yc] = 'p'
+                if yc in res["heatTimes"].keys():
+                    del self.cumulativeResults[i]["heatTimes"][yc]
+        return yellowCards
 
 
 def randomPenaltyAdvancementMaker(heat: dict,
@@ -172,6 +209,7 @@ def randomPenaltyAdvancementMaker(heat: dict,
     if prob <= prob_threshold:
         return heat
     if prob > prob_threshold:
+        ycProb = randomizer.random()
         penIndex = randomizer.randint(0, len(heat) - 1)
         advIndex = randomizer.randint(0, len(heat) - 1)
         while advIndex == penIndex:
@@ -191,6 +229,8 @@ def randomPenaltyAdvancementMaker(heat: dict,
             del heat[advSkaterNum]
             n_loop += 1
         heat[penSkaterNum] = 'p'
+        if ycProb > prob_threshold:
+            heat[penSkaterNum] = 'y'
         heat[advSkaterNum] = 'a'
         heatOut = {}
         finishingOrder = 0
@@ -201,7 +241,8 @@ def randomPenaltyAdvancementMaker(heat: dict,
                     if res == result_:
                         break
                 heatOut[skaterNum] = finishingOrder
-        heatOut.update({penSkaterNum: 'p', advSkaterNum: 'a'})
+        heatOut.update(
+            {penSkaterNum: heat[penSkaterNum], advSkaterNum: heat[advSkaterNum]})
         heat = heatOut
 
         if len(heat) == len(heatIn):

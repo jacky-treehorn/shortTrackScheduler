@@ -11,10 +11,27 @@ import sys
 from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
 
+
+def yellowCardReset(raceProgram_: raceProgram,
+                    pointsAllocation_: pointsAllocation,
+                    yellowCards: list,
+                    heatId: int) -> dict:
+    ''' If a skater receives a yellow card, the whole schedule
+    must be recalculated, this is a convenience function to handle
+    this situation.'''
+
+    raceProgram_.handleYellowCards(yellowCards, heatId)
+    cumulativeResults = copy.copy(pointsAllocation_.cumulativeResults)
+    pointsAllocation_.cumulativeResults = []
+    for resetHeatDict in cumulativeResults:
+        pointsAllocation_.allocatePoints(**resetHeatDict)
+    return raceProgram_.heatDict
+
+
 if __name__ == "__main__":
     raceProgram_ = raceProgram(totalSkaters=18,
-                               numRacesPerSkater=4,
-                               heatSize=4,
+                               numRacesPerSkater=3,
+                               heatSize=5,
                                considerSeeding=False,
                                fairStartLanes=True,
                                minHeatSize=3,
@@ -46,7 +63,9 @@ if __name__ == "__main__":
                 heatTimes[key] = float(result) + 40.0
         print('\n')
         print('Heat {0} result: {1}'.format(heatId, heat_))
-        pa.allocatePoints(heat_, heatTimes, heatId)
+        yellowCards = pa.allocatePoints(heat_, heatTimes, heatId)
+        if len(yellowCards) > 0:
+            heatDict = yellowCardReset(raceProgram_, pa, yellowCards, heatId)
         print('Intermediate results:\n')
         raceProgram_.buildResultsTable(
             intermediate=True, intermediatePrint=True, heatId=heatId)
