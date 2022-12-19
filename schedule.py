@@ -7,14 +7,15 @@ Created on Tue Feb 22 20:41:04 2022
 # pylint: disable=invalid-name
 import os
 from datetime import datetime
-from random import Random, shuffle
+from random import Random
 import copy
 import json
 import logging
+from itertools import chain
 from participant import skater
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
+from scipy.optimize import dual_annealing
 
 
 def setup_logger(name: str,
@@ -44,10 +45,31 @@ def setup_logger(name: str,
     return logger
 
 
+def initializeList(nSkaters: int,
+                   reqAppearances: int,
+                   optimalHeatSize: int,
+                   defaultValue: int = -1) -> list:
+    """Builds your initial Heat List, same as below, just returns a list of lists instead."""
+    skaterList = list(range(nSkaters))*reqAppearances
+    initList = []
+    heat = []
+    for skater_ in skaterList:
+        heat.append(skater_)
+        if len(heat) >= optimalHeatSize:
+            initList.append(heat)
+            heat = []
+    if len(heat) != 0:
+        while len(heat) < optimalHeatSize:
+            heat.append(defaultValue)
+        initList.append(heat)
+    return initList
+
+
 def initializeMatrix(nSkaters: int,
                      reqAppearances: int,
                      optimalHeatSize: int,
-                     maxDims: tuple) -> np.array:
+                     maxDims: tuple,
+                     defaultValue: int = -1) -> np.array:
     """Builds your initial Heat Matrix"""
     initMat = -np.ones(maxDims, int)
     out = []
@@ -61,7 +83,7 @@ def initializeMatrix(nSkaters: int,
             heat = []
     if len(heat) != 0:
         while len(heat) < optimalHeatSize:
-            heat.append(-1)
+            heat.append(defaultValue)
         out.append(heat)
     out = np.asarray(out)
     initMat[:out.shape[0], :out.shape[1]] = out
@@ -322,7 +344,8 @@ class raceProgram():
                  participantAgeGroup: dict = {},
                  participantSeeding: dict = {},
                  printDetails: bool = False,
-                 cleanCalculationDetails: bool = False
+                 cleanCalculationDetails: bool = False,
+                 initMatDefaultValue: int = -1
                  ):
         logging.shutdown()
         self.printDetailsPath = os.path.join(os.getcwd(), 'calculationDetails')
@@ -330,7 +353,10 @@ class raceProgram():
             self._cleanCalculationDetails()
         self._dateTimeFormat = '%Y%m%d-%H%M%S'
         self.printDetails = printDetails
+        self.initMatDefaultValue = initMatDefaultValue
         self.totalSkaters = totalSkaters
+        assert self.initMatDefaultValue not in range(
+            self.totalSkaters), "initMatDefaultValue is present in the range [0:totalSkaters], change the default value and start again."
         self.participantNames = participantNames
         if len(self.participantNames) > 0:
             assert len(self.participantNames) == self.totalSkaters, \
@@ -405,6 +431,7 @@ class raceProgram():
         self.skaterNums = list(range(self.totalSkaters))
         self.averageSeeding = float(self.totalSkaters + 1) / 2.0
         self.sampleStdDev = np.std(self.skaterNums)/np.sqrt(self.heatSize)
+        self.currentHeatList = []
 
     def _cleanCalculationDetails(self):
         if os.path.exists(self.printDetailsPath):
@@ -481,42 +508,58 @@ class raceProgram():
         return self.resultsTable
 
     def _appearancePotential(self,
-                             heatMat: np.array) -> float:
+                             heatMatIn: np.array,
+                             m_dims=None) -> float:
         """Calculates the appearance potential"""
+        heatMat = heatMatIn
+        if heatMatIn.ndim == 1:
+            assert isinstance(
+                m_dims, tuple), 'm_dims must be a tuple when heatMatIn.ndim == 1'
+            heatMat = heatMatIn.reshape(m_dims)
         pot = 0
-        val, counts = np.unique(
-            np.rint(heatMat.flatten()).astype(int), return_counts=True)
+        binCount = {}
+        for i in range(heatMat.shape[0]):
+            val, counts = np.unique(
+                heatMat[i, :], return_counts=True)
+            for v in val:
+                if v in binCount.keys():
+                    binCount[v] += 1
+                else:
+                    binCount[v] = 1
         binCountInit = dict(
             zip(range(self.totalSkaters), [0]*self.totalSkaters))
-        binCount = dict(zip(val, counts))
         for skater_, count in binCountInit.items():
             if skater_ in binCount.keys():
                 continue
             binCount[skater_] = count
+        for v, c in binCount.items():
+            if v < 0 and v != self.initMatDefaultValue:
+                pot += v**2*c
+            if v >= self.totalSkaters:
+                pot += (v-self.totalSkaters + 1)**2*c
         for skater_n in range(self.totalSkaters):
-            count = 0
             count = binCount[skater_n]
             pot += (self.numRacesPerSkater - count)**2
         return float(pot)
 
     def _encounterPotential(self,
                             heatMatIn: np.array,
-                            maxTheoreticalMatrixDims: tuple) -> float:
+                            m_dims=None,
+                            alpha: float = 1.0) -> float:
         """Calculates the encounter potential"""
-        expectedEncounters = ((self.heatSize-1) *
-                              self.numRacesPerSkater) - self.n_encounterErrors
-        expectedEncounters = max(expectedEncounters, self.totalSkaters//2)
-        encounterFactor = expectedEncounters/self.totalSkaters
+
         heatMat = heatMatIn
         if heatMatIn.ndim == 1:
-            heatMat = heatMatIn.reshape(maxTheoreticalMatrixDims)
+            assert isinstance(
+                m_dims, tuple), 'm_dims must be a tuple when heatMatIn.ndim == 1'
+            heatMat = heatMatIn.reshape(m_dims)
         binCountRowWise = []
         for i in range(heatMat.shape[0]):
             val, counts = np.unique(
-                np.rint(heatMat[i, :]).astype(int), return_counts=True)
+                heatMat[i, :], return_counts=True)
             binCount = dict(zip(val, counts))
             binCountRowWise.append(binCount)
-        pot = 0
+        pot = 0.0
         for i in range(self.totalSkaters):
             encounters = []
             for j in range(self.totalSkaters):
@@ -524,62 +567,123 @@ class raceProgram():
                     continue
                 for row in binCountRowWise:
                     if i in row.keys() and j in row.keys():
-                        if encounters.count(j) > encounterFactor:
-                            continue
-                        encounters.append(j)
-            pot += (expectedEncounters - len(encounters))**2
+                        encounters += [j]*row[j]
+            pot += alpha/float(len(encounters) + 1)
+            if len(encounters) > 1:
+                encountersAsSeries = pd.Series(encounters)
+                if encountersAsSeries.value_counts().size > 1:
+                    pot += alpha*(encountersAsSeries.value_counts().var())
         return float(pot)
 
     def _heatSizePotential(self,
                            heatMatIn: np.array,
-                           maxTheoreticalMatrixDims: tuple) -> float:
+                           m_dims=None) -> float:
         """Calculates the heat size potential"""
         heatMat = heatMatIn
         if heatMatIn.ndim == 1:
-            heatMat = heatMatIn.reshape(maxTheoreticalMatrixDims)
+            assert isinstance(
+                m_dims, tuple), 'm_dims must be a tuple when heatMatIn.ndim == 1'
+            heatMat = heatMatIn.reshape(m_dims)
         skaters = list(range(self.totalSkaters))
         pot = 0
         for i in range(heatMat.shape[0]):
             rowSum = 0
-            if all((x < 0 for x in np.rint(heatMat[i, :]))):
-                continue
-            for skater_ in np.rint(heatMat[i, :]).astype(int):
+            # if all((x < 0 for x in heatMat[i, :])):
+            #     continue
+            validHeat = False
+            for y in heatMat[i, :]:
+                if y in skaters:
+                    validHeat = True
+                    break
+            realSkaterFound = False
+            n_empty = 0
+            for j, skater_ in enumerate(heatMat[i, :]):
                 if skater_ in skaters:
+                    realSkaterFound = True
                     rowSum += 1
-            pot += (rowSum - self.heatSize)**2
+                if validHeat:
+                    if realSkaterFound:
+                        if skater_ not in skaters:
+                            n_empty += 1
+                    else:
+                        n_empty += 1
+            pot += (rowSum - self.heatSize)**2 + n_empty**2
         return float(pot)
 
     def _heatUniquenessPotential(self,
                                  heatMatIn: np.array,
-                                 maxTheoreticalMatrixDims: tuple) -> float:
+                                 m_dims=None) -> float:
         """Calculates the uniqueness potential"""
         heatMat = heatMatIn
         if heatMatIn.ndim == 1:
-            heatMat = heatMatIn.reshape(maxTheoreticalMatrixDims)
+            assert isinstance(
+                m_dims, tuple), 'm_dims must be a tuple when heatMatIn.ndim == 1'
+            heatMat = heatMatIn.reshape(m_dims)
         pot = 0
         for i in range(heatMat.shape[0]):
             rowSum = 0
             for j in range(heatMat.shape[1]):
-                if np.rint(heatMat[i, j]) < 0:
+                if heatMat[i, j] < 0:
                     continue
                 for k in range(j+1, heatMat.shape[1]):
-                    if np.rint(heatMat[i, k]) < 0:
+                    if heatMat[i, k] < 0:
                         continue
                     rowSum += kroneckerDelta(
-                        np.rint(heatMat[i, j]), np.rint(heatMat[i, k]))
-            pot += rowSum
+                        heatMat[i, j], heatMat[i, k])
+            pot += rowSum**2
         return float(pot)
 
     def heatPotentialCalc(self,
                           heatMat: np.array,
-                          maxTheoreticalMatrixDims: tuple) -> float:
-        pot = self._appearancePotential(heatMat)
-        pot += self._encounterPotential(heatMat,
-                                        maxTheoreticalMatrixDims)
-        pot += self._heatSizePotential(heatMat,
-                                       maxTheoreticalMatrixDims)
-        pot += self._heatUniquenessPotential(heatMat,
-                                             maxTheoreticalMatrixDims)
+                          m_dims=None,
+                          integerize: bool = True,
+                          **kwargs) -> float:
+        heatMat0 = heatMat
+        if integerize:
+            heatMat0 = np.rint(heatMat).astype(int)
+        pot = self._appearancePotential(heatMat0,
+                                        m_dims)
+        pot += self._heatSizePotential(heatMat0,
+                                       m_dims)
+        pot += self._heatUniquenessPotential(heatMat0,
+                                             m_dims)
+        pot += self._encounterPotential(heatMat0,
+                                        m_dims,
+                                        alpha=2.0)
+        return pot
+
+    def heatPotentialCalcList(self,
+                              splittingRules: list,
+                              integerize: bool = True,
+                              **kwargs) -> float:
+        skaterList = self.skaterNums
+        assert len(splittingRules) == self.numRacesPerSkater * \
+            len(skaterList) + 1, 'Wrong length for splittingRules.'
+        n_heats = int(np.rint(splittingRules[0]))
+        n_skaterList = self.numRacesPerSkater * len(skaterList)
+        heatSize = 1
+        while heatSize*n_heats < n_skaterList:
+            heatSize += 1
+        allHeats = []
+        subHeat = []
+        sr = [int(np.rint(splittingRules[0]))]
+        maxloc = len(skaterList) - 1
+        for sr_ in splittingRules[1:]:
+            locc = min(max(0, int(np.rint(sr_))), maxloc)
+            sr.append(locc)
+        for skater_ in sr[1:]:
+            subHeat.append(skaterList[skater_])
+            if len(subHeat) >= heatSize:
+                allHeats.append(subHeat)
+                subHeat = []
+        if len(subHeat) != 0:
+            while len(subHeat) < heatSize:
+                subHeat.append(self.initMatDefaultValue)
+            allHeats.append(subHeat)
+        self.currentHeatList = allHeats
+        allHeats = np.asarray(allHeats)
+        pot = self.heatPotentialCalc(
+            allHeats, allHeats.shape, integerize, **kwargs)
         return pot
 
     def _randomSearch(self,
@@ -788,19 +892,7 @@ class raceProgram():
         self.shift = shift
         return heatDict
 
-    def buildHeats(self,
-                   max_attempts: int = 10000,
-                   adjustAfterNAttempts: int = 500,
-                   encounterFlexibility: int = 0,
-                   verbose: bool = True,
-                   method: str = 'random_search') -> dict:
-        """ Calculates a heat structure """
-        assert method in ['sgp', 'random_search'], 'method must be either {}'.format(
-            ['random_search', 'sgp'])
-        adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
-        if self.numRacesPerSkater == 0:
-            while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
-                self.numRacesPerSkater += 1
+    def _buildSkaterDict(self):
         for i_skater in self.skaterNums:
             skaterName = 'Person_'+str(i_skater)
             if i_skater < len(self.participantNames):
@@ -820,6 +912,21 @@ class raceProgram():
                                                name=skaterName,
                                                team=team,
                                                ageCategory=ageCategory)
+
+    def buildHeats(self,
+                   max_attempts: int = 10000,
+                   adjustAfterNAttempts: int = 500,
+                   encounterFlexibility: int = 0,
+                   verbose: bool = True,
+                   method: str = 'random_search') -> dict:
+        """ Calculates a heat structure """
+        assert method in ['sgp', 'random_search', 'minimize'], 'method must be either {}'.format(
+            ['random_search', 'sgp', 'minimize'])
+        adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
+        if self.numRacesPerSkater == 0:
+            while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
+                self.numRacesPerSkater += 1
+        self._buildSkaterDict()
         if method == 'random_search':
             heatDict = self._randomSearch(max_attempts,
                                           adjustAfterNAttempts,
@@ -840,6 +947,8 @@ class raceProgram():
                         'sgp is not very good at making start lanes fair!')
 
             heatDict = self._sgp(verbose)
+        if method == 'minimize':
+            heatDict = self._minimize(verbose, max_attempts)
         if len(heatDict) == 0:
             return heatDict
         if self.shift > 1 or encounterFlexibility > 1:
@@ -1343,15 +1452,37 @@ class raceProgram():
             return heats
         return {}
 
-    def _gradOpt(self,
-                 verbose: bool = True) -> dict:
-        """ Don't use this, it does not work yet """
-        maxTheoreticalMatrixDims = (max(
-            self.totalSkaters*(self.totalSkaters - 1)//4, self.numRacesPerSkater*2), self.heatSize*2)
-        initM = initializeMatrix(self.totalSkaters,
-                                 self.numRacesPerSkater,
-                                 self.heatSize,
-                                 maxTheoreticalMatrixDims)
+    def _minimize(self,
+                  verbose: bool = True,
+                  max_attempts: int = 100) -> dict:
+        """ A more structured search for the optimal configuration """
+
+        initM = initializeList(self.totalSkaters,
+                               self.numRacesPerSkater,
+                               self.heatSize,
+                               self.initMatDefaultValue)
+
+        if max_attempts > 100:
+            max_attempts = 100
+            if verbose:
+                print('max_attempts greater than 100, setting to 100.')
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'max_attempts greater than 100, setting to 100.')
+        locNotDefault = []
+        for sktr_ in list(chain(*initM)):
+            if sktr_ != self.initMatDefaultValue:
+                locNotDefault.append(self.skaterNums.index(sktr_))
+        maxHeats = len(list(chain(*initM)))//2
+        if len(list(chain(*initM))) % 2 != 0:
+            maxHeats += 1
+        assert self.numRacesPerSkater < maxHeats, 'numRacesPerSkater too small, should be larger than {}.'.format(
+            maxHeats)
+        bounds = [(self.numRacesPerSkater, maxHeats)]
+        bounds += [(0, len(self.skaterNums)-1)]*len(locNotDefault)
+        locNotDefault = [len(initM)]+locNotDefault
+        initPot = self.heatPotentialCalcList(
+            locNotDefault)
 
         conTests = convergenceTests(minHeatSize=self.minHeatSize,
                                     verbose=verbose,
@@ -1359,53 +1490,40 @@ class raceProgram():
                                     averageSeeding=self.averageSeeding,
                                     numRacesPerSkater=self.numRacesPerSkater,
                                     sampleStdDev=self.sampleStdDev)
-        for i in range(initM.shape[0]):
-            if all((x == -1 for x in initM[i, :])):
-                break
-        # initM = initM[:i+1, :min(self.heatSize+3, self.heatSize*2)]
-        initM = initM[:i+2, :]
-        maxTheoreticalMatrixDims = initM.shape
-        initPot = self.heatPotentialCalc(
-            initM.flatten(), maxTheoreticalMatrixDims)
-        print(initPot)
+
         n_encounterErrors = 0
         n_seedingErrors = 0
         n_appearancesErrors = 0
         shift = 1
         heatDict = None
-        for n_attempts in range(100):
+        self._buildSkaterDict()
+        success = False
+        for n_attempts_ in range(max_attempts):
+            success = False
+            n_attempts = n_attempts_ + 1
             if heatDict is not None:
                 print(heatDict)
-            direc = [0]*len(initM.flatten())
-            upOrDown = [-1, 1]
-            for i, elem in enumerate(initM.flatten()):
-                shuffle(upOrDown)
-                direc[i] = upOrDown[0]
-                if elem <= 0:
-                    direc[i] = 1
-                if elem >= self.totalSkaters - 1:
-                    direc[i] = -1
-            direc = np.diag(direc)
-
-            res = minimize(self.heatPotentialCalc,
-                           initM.flatten(),
-                           args=(maxTheoreticalMatrixDims,),
-                           tol=100.0,
-                           method='Powell',
-                           options={'disp': True,
-                                    'return_all': True,
-                                    # 'direc': direc,
-                                    'maxiter': 1000})
-            out = np.rint(res.x.reshape(maxTheoreticalMatrixDims)).astype(int)
-            initM = out
-            col0 = initM[:, n_attempts % self.heatSize]
-            np.random.shuffle(col0)
-            initM[:, n_attempts % self.heatSize] = col0
+            res = dual_annealing(self.heatPotentialCalcList,
+                                 x0=locNotDefault,
+                                 bounds=bounds,
+                                 maxiter=50,
+                                 maxfun=2000)
+            optimisedPotential = self.heatPotentialCalcList(res.x)
+            if verbose:
+                print('Optimised potential after {0} run(s): {1}, was: {2}'.format(
+                    n_attempts, optimisedPotential, initPot))
+            if self.printDetails:
+                self.buildHeatsLogger.info(
+                    'Optimised potential after %s run(s): %s, was: %s', n_attempts, optimisedPotential, initPot)
+            initPot = optimisedPotential
             heatDict = {}
-            for i, row in enumerate(out):
-                outRow = row[(row >= 0) & (row < self.totalSkaters)]
+            for i, row in enumerate(self.currentHeatList):
+                # outRow = row[(row >= 0) & (row < self.totalSkaters)
+                #              & (row != self.initMatDefaultValue)]
+                outRow = [x for x in row if x >= 0 and x <
+                          self.totalSkaters and x != self.initMatDefaultValue]
                 if len(outRow) > 0:
-                    outRow = list(set(outRow.tolist()))
+                    outRow = list(set(outRow))
                     heatDict[i+1] = {}
                     heatDict[i+1] = {'heat': outRow}
                     heatDict[i+1]['averageSeeding'] = 0
@@ -1461,11 +1579,13 @@ class raceProgram():
                         skater_.removeAllHeatAppearances()
                         skater_.removeAllEncounters()
                     continue
+            success = True
             if self.fairStartLanes:
                 self.makeStartLanesFair(heatDict)
-            print('Success after {} attempts.'.format(n_attempts))
+            print('Success after {} attempt(s).'.format(n_attempts))
             if self.printDetails:
                 self.buildHeatsLogger.info(
-                    'Success after %s attempts.', n_attempts)
+                    'Success after %s attempt(s).', n_attempts)
             return heatDict
-        return {}
+        if heatDict is None or not success:
+            return {}

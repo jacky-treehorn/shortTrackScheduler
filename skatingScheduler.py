@@ -38,8 +38,9 @@ if __name__ == "__main__":
                                printDetails=True,
                                cleanCalculationDetails=True
                                )
+
     heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
-                                       method='sgp')
+                                       method='minimize')
     if len(heatDict) == 0:
         print('No suitable heat structure could be found, exiting.')
         sys.exit()
@@ -65,7 +66,8 @@ if __name__ == "__main__":
         print('Heat {0} result: {1}'.format(heatId, heat_))
         yellowCards = pa.allocatePoints(heat_, heatTimes, heatId)
         if len(yellowCards) > 0:
-            heatDict = yellowCardReset(raceProgram_, pa, yellowCards, heatId)
+            heatDict = yellowCardReset(
+                raceProgram_, pa, yellowCards, heatId)
         print('Intermediate results:\n')
         raceProgram_.buildResultsTable(
             intermediate=True, intermediatePrint=True, heatId=heatId)
