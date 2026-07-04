@@ -29,18 +29,18 @@ def yellowCardReset(raceProgram_: raceProgram,
 
 
 if __name__ == "__main__":
-    raceProgram_ = raceProgram(totalSkaters=18,
-                               numRacesPerSkater=3,
-                               heatSize=5,
+    raceProgram_ = raceProgram(totalSkaters=22,
+                               numRacesPerSkater=4,
+                               heatSize=4,
                                considerSeeding=False,
                                fairStartLanes=True,
-                               minHeatSize=3,
+                               minHeatSize=4,
                                printDetails=True,
                                cleanCalculationDetails=True
                                )
 
     heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
-                                       method='minimize')
+                                       method='sgp')
     if len(heatDict) == 0:
         print('No suitable heat structure could be found, exiting.')
         sys.exit()

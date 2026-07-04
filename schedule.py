@@ -18,6 +18,17 @@ import pandas as pd
 from scipy.optimize import dual_annealing
 
 
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
+
+
 def setup_logger(name: str,
                  log_file: str,
                  level=logging.INFO,
@@ -167,8 +178,14 @@ class socialGolferProblem():
         self.n_participants = n_participants
         self.heatSize = heatSize
         self.n_power = 0
+        self.remainder = self.n_participants - 1
         while (self.heatSize**self.n_power < self.n_participants):
-            self.n_power += 1
+            remainder = self.heatSize**(self.n_power + 1) - self.n_participants
+            if np.abs(remainder) < np.abs(self.remainder):
+                self.n_power += 1
+                self.remainder = remainder
+            else:
+                break
 
     def distanceToNext(self) -> list:
         out = []
@@ -196,7 +213,9 @@ class socialGolferProblem():
         column = []
         initLength = 0
         for col in range(sgpMatrix.shape[1]):
-            for person in range(sgpMatrix.shape[0]):
+            persons = list(range(sgpMatrix.shape[0]))
+            Random().shuffle(persons)
+            for person in persons:
                 if person >= self.n_participants:
                     continue
                 hKey = int(sgpMatrix[person, col]+col*self.heatSize)
@@ -348,6 +367,8 @@ class raceProgram():
                  initMatDefaultValue: int = -1
                  ):
         logging.shutdown()
+        self.minimumUniqueEncountersPerSkater = numRacesPerSkater * \
+            (heatSize - 2)
         self.printDetailsPath = os.path.join(os.getcwd(), 'calculationDetails')
         if cleanCalculationDetails:
             self._cleanCalculationDetails()
@@ -358,34 +379,10 @@ class raceProgram():
         assert self.initMatDefaultValue not in range(
             self.totalSkaters), "initMatDefaultValue is present in the range [0:totalSkaters], change the default value and start again."
         self.participantNames = participantNames
-        if len(self.participantNames) > 0:
-            assert len(self.participantNames) == self.totalSkaters, \
-                'Length of participant names does not match the number of skaters!'
-            assert len(self.participantNames) == len(set(self.participantNames)), \
-                'Possible duplicate in participant names.'
         self.participantTeams = participantTeams
-        if len(self.participantTeams) > 0:
-            for key in self.participantTeams.keys():
-                assert key in self.participantNames.keys(), \
-                    '{} in participantTeams not found in participantNames'.format(
-                        key)
         self.participantAgeGroup = participantAgeGroup
-        if len(self.participantAgeGroup) > 0:
-            for key in self.participantAgeGroup.keys():
-                assert key in self.participantNames.keys(), \
-                    '{} in participantAgeGroup not found in participantNames'.format(
-                        key)
         self.participantSeeding = participantSeeding
-        if len(self.participantSeeding) > 0:
-            assert len(self.participantSeeding) == self.totalSkaters, \
-                'Length of participant seeding does not match the number of skaters!'
-            for key in self.participantSeeding.keys():
-                assert key in self.participantNames.keys(),  \
-                    '{} in participantSeeding not found in participantNames'.format(
-                        key)
-            assert set(self.participantSeeding.values()) == set(list(range(1, totalSkaters + 1))), \
-                'Seeding should only contain sequential numbers from {0} to {1}'.format(
-                    1, totalSkaters)
+        self._checkParticipants()
         self.heats = []
         self.numRacesPerSkater = numRacesPerSkater
         assert self.numRacesPerSkater >= 0, 'numRaces must be greater than or equal to 0.'
@@ -428,10 +425,43 @@ class raceProgram():
                                                               + '.txt'))
         self.shift = 0
         self.n_encounterErrors = 0
+        self._runAveSeedingAndStdDev()
+        self.currentHeatList = []
+
+    def _runAveSeedingAndStdDev(self):
         self.skaterNums = list(range(self.totalSkaters))
         self.averageSeeding = float(self.totalSkaters + 1) / 2.0
         self.sampleStdDev = np.std(self.skaterNums)/np.sqrt(self.heatSize)
-        self.currentHeatList = []
+
+    def _checkParticipants(self):
+        if len(self.participantNames) > 0:
+            assert len(self.participantNames) == self.totalSkaters, \
+                'Length of participant names does not match the number of skaters!'
+            assert len(self.participantNames) == len(set(self.participantNames)), \
+                'Possible duplicate in participant names.'
+
+        if len(self.participantTeams) > 0:
+            for key in self.participantTeams.keys():
+                assert key in self.participantNames.keys(), \
+                    '{} in participantTeams not found in participantNames'.format(
+                        key)
+
+        if len(self.participantAgeGroup) > 0:
+            for key in self.participantAgeGroup.keys():
+                assert key in self.participantNames.keys(), \
+                    '{} in participantAgeGroup not found in participantNames'.format(
+                        key)
+
+        if len(self.participantSeeding) > 0:
+            assert len(self.participantSeeding) == self.totalSkaters, \
+                'Length of participant seeding does not match the number of skaters!'
+            for key in self.participantSeeding.keys():
+                assert key in self.participantNames.keys(),  \
+                    '{} in participantSeeding not found in participantNames'.format(
+                        key)
+            assert set(self.participantSeeding.values()) == set(list(range(1, self.totalSkaters + 1))), \
+                'Seeding should only contain sequential numbers from {0} to {1}'.format(
+                    1, self.totalSkaters)
 
     def _cleanCalculationDetails(self):
         if os.path.exists(self.printDetailsPath):
@@ -992,6 +1022,8 @@ class raceProgram():
             if self.printDetails:
                 self.buildHeatsLogger.info(printText)
         for skater_ in self.skaterDict.values():
+            if skater_.isGhost:
+                continue
             if verbose:
                 print('Skater {0} appears in {1} heats: '.format(skater_.skaterNum, skater_.totalAppearances), skater_.heatAppearances,
                       ', Total encounters: {0}, Total unique encounters: {1}'.format(skater_.totalEncounters, skater_.totalUniqueEncounters))
@@ -1004,12 +1036,12 @@ class raceProgram():
                                            skater_.skaterNum, skater_.totalEncounters, skater_.totalUniqueEncounters)
             for heatNum_ in skater_.heatAppearances:
                 assert skater_.skaterNum in self.heatDict[heatNum_]['heat'], \
-                    'heatAllocationError: Skater {0} is not in the allocated heat: {1}'.format(
-                        skater_.skaterNum, self.heatDict[heatNum_]['heat'])
+                    'heatAllocationError: Skater {0} is not in heat {2}: {1}'.format(
+                        skater_.skaterNum, self.heatDict[heatNum_]['heat'], heatNum_)
         if self.printDetails:
             with open(os.path.join(self.printDetailsPath, 'heats_' +
                                    datetime.now().strftime(self._dateTimeFormat)+'.json'), 'w') as fil:
-                json.dump(heatDict, fil, indent=4)
+                json.dump(heatDict, fil, indent=4, cls=NpEncoder)
 
         return heatDict
 
@@ -1078,7 +1110,7 @@ class raceProgram():
         """ Does what it says """
         if len(heatDict) == 0:
             if verbose:
-                print('ERROR makeStartLanesFair: heatDict is emptpy!')
+                print('ERROR makeStartLanesFair: heatDict is empty!')
             if self.printDetails:
                 self.buildHeatsLogger.error(
                     'makeStartLanesFair: heatDict is emptpy!')
@@ -1260,16 +1292,49 @@ class raceProgram():
         return concludedHeats_
 
     def _sgp(self,
-             verbose: bool = True) -> dict:
-
+             verbose: bool = True,
+             permitChangeInNumberRaces: bool = False) -> dict:
         sgp = socialGolferProblem(self.totalSkaters, self.heatSize)
+        if sgp.remainder > 0:
+            remainder = min(sgp.remainder, self.totalSkaters - 1)
+            if verbose and remainder >= self.totalSkaters:
+                print("sgp has produced a large remainder: {0}, consider changing heatSize.".format(
+                    sgp.remainder))
+            highestKey = np.max(list(self.skaterDict.keys()))
+            highestSeed = 0
+            highestNum = 0
+            for x in self.skaterDict.values():
+                if x.skaterNum > highestNum:
+                    highestNum = x.skaterNum
+                if x.seed > highestSeed:
+                    highestSeed = x.seed
+
+            for ng in range(1, remainder+1):
+                self.skaterDict[highestKey +
+                                ng] = skater(highestKey + ng,
+                                             highestSeed + 1,
+                                             self.skaterDict[highestKey].team,
+                                             self.skaterDict[highestKey].ageCategory,
+                                             'ghost_'+str(ng)
+                                             )
+                self.skaterDict[highestKey + ng].isGhost = True
+            self.totalSkaters += remainder
+            self._checkParticipants()
+            self._runAveSeedingAndStdDev()
+            sgp.__init__(self.totalSkaters, self.heatSize)
+
         out = sgp.groupAssignment()
         M = sgp.sgpMatrixToHeats(out)
         totalAttempts = 1
         numRacesPerSkater_shift = -1
         if self.considerSeeding:
             totalAttempts = 2
-
+        if sgp.remainder != 0:
+            totalAttempts *= 20
+        heatScore = -1.0
+        persons = list(range(out.shape[0] - sgp.remainder))
+        bestHeats = {}
+        bestSkaterDict = {}
         for n_attempts in range(totalAttempts):
             heats = {}
             usedHKs = []
@@ -1277,17 +1342,34 @@ class raceProgram():
             while any((skater_.totalAppearances < self.numRacesPerSkater for skater_ in self.skaterDict.values())):
                 luhk = len(usedHKs)
                 for col in range(out.shape[1]):
-                    for person in range(out.shape[0]):
-                        if person >= self.totalSkaters:
-                            break
-                        # +hkeyIterator*self.heatSize)
-                        hKey = int(out[person, col])
-                        if hKey in usedHKs:
-                            hKey += (usedHKs.count(hKey) //
-                                     self.heatSize)*self.heatSize
+                    self.randomizer.shuffle(persons)
+                    for person in persons:
+                        try:
+                            assert hsTol == 1
+                            hKey = int(out[person, col])
+                            if hKey in usedHKs:
+                                hKey += (usedHKs.count(hKey) //
+                                         self.heatSize)*self.heatSize
+                        except:
+                            if usedHKs:
+                                breakFound = False
+                                for _hkey in set(usedHKs):
+                                    if usedHKs.count(_hkey) // self.heatSize == 0:
+                                        hKey = _hkey
+                                        breakFound = True
+                                        break
+                                if not breakFound:
+                                    hKey = int(np.max(usedHKs) + 1)
+                            else:
+                                hKey = 1
                         if person in self.skaterDict.keys():
+                            if self.skaterDict[person].isGhost:
+                                del self.skaterDict[person]
+                                continue
                             if self.skaterDict[person].totalAppearances >= self.numRacesPerSkater:
                                 continue
+                        else:
+                            continue
                         if hKey in heats.keys():
                             if person in heats[hKey]['heat']:
                                 continue
@@ -1300,20 +1382,21 @@ class raceProgram():
                         else:
                             heats[hKey] = {'heat': [person],
                                            'averageSeeding': 0}
-                        usedHKs.append(int(out[person, col]))
+                        usedHKs.append(hKey)
                 if len(usedHKs) == luhk:
                     hsTol += 1
                 if hsTol >= 4:
-                    self.numRacesPerSkater += numRacesPerSkater_shift
-                    if self.numRacesPerSkater <= 1:
-                        numRacesPerSkater_shift = 1
-                        self.numRacesPerSkater += 2
-                    if verbose:
-                        print('Changing numRacesPerSkater: {}'.format(
-                            self.numRacesPerSkater))
-                    if self.printDetails:
-                        self.buildHeatsLogger.warning(
-                            'Changing numRacesPerSkater %s', self.numRacesPerSkater)
+                    if permitChangeInNumberRaces:
+                        self.numRacesPerSkater += numRacesPerSkater_shift
+                        if self.numRacesPerSkater <= 1:
+                            numRacesPerSkater_shift = 1
+                            self.numRacesPerSkater += 2
+                        if verbose:
+                            print('Changing numRacesPerSkater: {}'.format(
+                                self.numRacesPerSkater))
+                        if self.printDetails:
+                            self.buildHeatsLogger.warning(
+                                'Changing numRacesPerSkater %s', self.numRacesPerSkater)
                     for skater_ in self.skaterDict.values():
                         skater_.removeAllHeatAppearances()
                     heats = {}
@@ -1444,11 +1527,30 @@ class raceProgram():
             heatAsArray = np.zeros((len(heats), longestHeatLength))
             for heatInd, heat in enumerate(heats.values()):
                 heatAsArray[heatInd, :len(heat['heat'])] = heat['heat']
-            heatScore = self.heatPotentialCalc(heatAsArray, heatAsArray.shape)
+            heatScore_ = self.heatPotentialCalc(heatAsArray, heatAsArray.shape)
+            if heatScore < 0.0:
+                heatScore = heatScore_
+                bestHeats = copy.copy(heats)
+                bestSkaterDict = copy.copy(self.skaterDict)
+            else:
+                if heatScore_ < heatScore and not any((x.totalUniqueEncounters < self.minimumUniqueEncountersPerSkater for x in self.skaterDict.values())):
+                    heatScore = heatScore_
+                    bestHeats = copy.copy(heats)
+                    bestSkaterDict = copy.copy(self.skaterDict)
+            if totalAttempts > 1 and n_attempts < totalAttempts - 1:
+                for skater_ in self.skaterDict.values():
+                    skater_.removeAllHeatAppearances()
+                    skater_.removeAllEncounters()
+                heats = {}
+                usedHKs = []
+                hsTol = 1
+                continue
             if verbose:
                 print('Heat Score: {}'.format(heatScore))
             if self.printDetails:
                 self.buildHeatsLogger.info('Heat Score: %s', heatScore)
+            self.skaterDict = bestSkaterDict
+            heats = bestHeats
             return heats
         return {}
 

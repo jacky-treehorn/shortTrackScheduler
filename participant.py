@@ -31,6 +31,7 @@ class skater():
         self.team = team
         self.ageCategory = ageCategory
         self.name = name
+        self.isGhost = False
         self._startPositionValues = []
         self._startLanes = []
         self.heatTimes = {}
