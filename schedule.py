@@ -63,6 +63,7 @@ def initializeList(nSkaters: int,
     """Builds your initial Heat List, same as below, just returns a list of lists instead."""
     skaterList = list(range(nSkaters))*reqAppearances
     initList = []
+    np.random.shuffle(skaterList)
     heat = []
     for skater_ in skaterList:
         heat.append(skater_)
@@ -364,7 +365,8 @@ class raceProgram():
                  participantSeeding: dict = {},
                  printDetails: bool = False,
                  cleanCalculationDetails: bool = False,
-                 initMatDefaultValue: int = -1
+                 initMatDefaultValue: int = -1,
+                 **kwargs
                  ):
         logging.shutdown()
         self.minimumUniqueEncountersPerSkater = numRacesPerSkater * \
@@ -601,8 +603,9 @@ class raceProgram():
             pot += alpha/float(len(encounters) + 1)
             if len(encounters) > 1:
                 encountersAsSeries = pd.Series(encounters)
+                # If the length of encountersAsSeries.value_counts() is short, the potential should rise
                 if encountersAsSeries.value_counts().size > 1:
-                    pot += alpha*(encountersAsSeries.value_counts().var())
+                    pot += alpha*self.minimumUniqueEncountersPerSkater*(1.0/encountersAsSeries.value_counts().size)
         return float(pot)
 
     def _heatSizePotential(self,
@@ -1601,6 +1604,17 @@ class raceProgram():
         self._buildSkaterDict()
         success = False
         for n_attempts_ in range(max_attempts):
+            if n_attempts_ > 0:
+                # Give everything a new starting point.
+                initM = initializeList(self.totalSkaters,
+                        self.numRacesPerSkater,
+                        self.heatSize,
+                        self.initMatDefaultValue)
+                locNotDefault = []
+                for sktr_ in list(chain(*initM)):
+                    if sktr_ != self.initMatDefaultValue:
+                        locNotDefault.append(self.skaterNums.index(sktr_))
+                locNotDefault = [len(initM)]+locNotDefault
             success = False
             n_attempts = n_attempts_ + 1
             if heatDict is not None:

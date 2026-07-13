@@ -11,6 +11,18 @@ import sys
 from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
 
+VALIDARGS = {"totalSkaters": "int",
+             "numRacesPerSkater": "int",
+             "heatSize": "int",
+             "considerSeeding": "bool",
+             "fairStartLanes": "bool",
+             "minHeatSize": "int",
+             "participantNames": "filePath", # For calls from winsport, do this later
+             "participantTeams": "filePath", # For calls from winsport, do this later
+             "participantAgeGroup": "filePath", # For calls from winsport, do this later
+             "participantSeeding": "filePath", # For calls from winsport, do this later
+             "method": "str"
+}
 
 def yellowCardReset(raceProgram_: raceProgram,
                     pointsAllocation_: pointsAllocation,
@@ -29,18 +41,53 @@ def yellowCardReset(raceProgram_: raceProgram,
 
 
 if __name__ == "__main__":
-    raceProgram_ = raceProgram(totalSkaters=22,
-                               numRacesPerSkater=4,
-                               heatSize=4,
-                               considerSeeding=False,
-                               fairStartLanes=True,
-                               minHeatSize=4,
-                               printDetails=True,
-                               cleanCalculationDetails=True
+    debug = False
+    argDict = {}
+    val = None
+    key = None
+    for runArg in sys.argv[::-1]:
+        if key is not None and val is not None:
+            argDict[key] = val
+            key = None
+            val = None
+        if isinstance(runArg, str):
+            if val is None:
+                val = runArg
+                continue
+            if key is None and runArg.startswith("--") and runArg[2:] in VALIDARGS:
+                key = runArg[2:]
+            else:
+                val = None
+    convertedArgDict = {}
+    for key, val in argDict.items():
+        if VALIDARGS[key] == "int":
+            convertedArgDict[key] = int(val)
+        if VALIDARGS[key] == "bool":
+            convertedArgDict[key] = True if val.lower() in ["1", "true"] else False
+        if VALIDARGS[key] == "filePath":
+            print("Not implemented yet")
+        if VALIDARGS[key] == "str":
+            convertedArgDict[key] = val
+
+    if debug:
+        convertedArgDict["totalSkaters"] = 22
+        convertedArgDict["numRacesPerSkater"] = 4
+        convertedArgDict["heatSize"] = 4
+        convertedArgDict["considerSeeding"] = False
+        convertedArgDict["fairStartLanes"] = True
+        convertedArgDict["minHeatSize"] = 4
+        convertedArgDict["method"] = "sgp"
+    method="sgp"
+    if "method" in convertedArgDict and convertedArgDict["method"].lower() in ['sgp', 'random_search', 'minimize']:
+        method = convertedArgDict["method"].lower()
+        del convertedArgDict["method"]
+    raceProgram_ = raceProgram(printDetails=True,
+                               cleanCalculationDetails=True,
+                               **convertedArgDict
                                )
 
     heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
-                                       method='sgp')
+                                       method=method)
     if len(heatDict) == 0:
         print('No suitable heat structure could be found, exiting.')
         sys.exit()
