@@ -21,7 +21,8 @@ VALIDARGS = {"totalSkaters": "int",
              "participantTeams": "filePath", # For calls from winsport, do this later
              "participantAgeGroup": "filePath", # For calls from winsport, do this later
              "participantSeeding": "filePath", # For calls from winsport, do this later
-             "method": "str"
+             "method": "str",
+             "runSimulation": "bool"
 }
 
 def yellowCardReset(raceProgram_: raceProgram,
@@ -77,10 +78,14 @@ if __name__ == "__main__":
         convertedArgDict["fairStartLanes"] = True
         convertedArgDict["minHeatSize"] = 4
         convertedArgDict["method"] = "sgp"
+        convertedArgDict["runSimulation"] = True
     method="sgp"
     if "method" in convertedArgDict and convertedArgDict["method"].lower() in ['sgp', 'random_search', 'minimize']:
         method = convertedArgDict["method"].lower()
         del convertedArgDict["method"]
+    runSimulation = False
+    if "runSimulation" in convertedArgDict and convertedArgDict["runSimulation"]:
+        runSimulation = convertedArgDict["runSimulation"]
     raceProgram_ = raceProgram(printDetails=True,
                                cleanCalculationDetails=True,
                                **convertedArgDict
@@ -89,7 +94,10 @@ if __name__ == "__main__":
     heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
                                        method=method)
     if len(heatDict) == 0:
-        print('No suitable heat structure could be found, exiting.')
+        input('No suitable heat structure could be found, press any key to exit.')
+        sys.exit()
+    if not runSimulation:
+        input('No simulation requested, press any key to exit')
         sys.exit()
     pa = pointsAllocation(raceProgram_.skaterDict,
                           verbose=True,

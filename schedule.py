@@ -70,10 +70,16 @@ def initializeList(nSkaters: int,
         if len(heat) >= optimalHeatSize:
             initList.append(heat)
             heat = []
+    # Maybe randomly distribute them to existing heats?
     if len(heat) != 0:
-        while len(heat) < optimalHeatSize:
-            heat.append(defaultValue)
-        initList.append(heat)
+        # while len(heat) < optimalHeatSize:
+        #     heat.append(defaultValue)
+        # initList.append(heat)
+        otherHeats = list(range(len(initList)))
+        np.random.shuffle(otherHeats)
+        for i, person in enumerate(heat):
+            initList[otherHeats[i]].append(person)
+
     return initList
 
 
@@ -262,9 +268,14 @@ class convergenceTests():
     def heatLengthTest(self,
                        heatDict: dict,
                        n_attempts: int = 0,
-                       logger=None) -> int:
+                       logger=None,
+                       ghostSkaterList: list = []) -> int:
 
-        if not all((len(heat_['heat']) >= self.minHeatSize for heat_ in heatDict.values())):
+        deGhostedHeats = []
+        for heat_ in heatDict.values():
+            heatNew = [x for x in heat_['heat'] if x not in ghostSkaterList]
+            deGhostedHeats.append(heatNew)
+        if not all((len(heat_) >= self.minHeatSize for heat_ in deGhostedHeats)):
             if self.verbose:
                 print('heatSizeError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                     n_attempts))
@@ -289,7 +300,7 @@ class convergenceTests():
                        skaterDict: dict,
                        n_attempts: int = 0,
                        logger=None) -> tuple:
-        if not all((skater_.totalAppearances == self.numRacesPerSkater for skater_ in skaterDict.values())):
+        if not all((skater_.totalAppearances == self.numRacesPerSkater for skater_ in skaterDict.values() if not skater_.isGhost)):
             if self.verbose:
                 print('totalAppearancesError: Attempt {0} produced an unfavourable Heat structure, modifying...'.format(
                     n_attempts))
@@ -306,15 +317,17 @@ class convergenceTests():
                       shift: int,
                       skaterDict: dict,
                       n_attempts: int = 0,
-                      logger=None) -> tuple:
+                      logger=None,
+                      minUniqueEncounters: int = 0) -> tuple:
         allEncounters = [
-            x.totalEncounters for x in skaterDict.values()]
+            x.totalEncounters for x in skaterDict.values() if not x.isGhost]
         encountersError = False
         for i, enctr in enumerate(allEncounters):
             for j in range(i+1, len(allEncounters)):
                 if np.abs(enctr - allEncounters[j]) > shift:
                     encountersError = True
                     break
+        encountersError = encountersError and any((x.totalUniqueEncounters < minUniqueEncounters for x in skaterDict.values() if not x.isGhost))
         if encountersError:
             n_encounterErrors += 1
             if self.verbose:
@@ -366,9 +379,14 @@ class raceProgram():
                  printDetails: bool = False,
                  cleanCalculationDetails: bool = False,
                  initMatDefaultValue: int = -1,
+                 printWinsportHeats: bool = True,
+                 winsportEventName: str = "winsportEvent0",
                  **kwargs
                  ):
         logging.shutdown()
+        self.ghostSkaterNums = set()
+        self.winsportEventName = winsportEventName
+        self.printWinsportHeats = printWinsportHeats
         self.minimumUniqueEncountersPerSkater = numRacesPerSkater * \
             (heatSize - 2)
         self.printDetailsPath = os.path.join(os.getcwd(), 'calculationDetails')
@@ -633,14 +651,19 @@ class raceProgram():
             for j, skater_ in enumerate(heatMat[i, :]):
                 if skater_ in skaters:
                     realSkaterFound = True
-                    rowSum += 1
+                    if skater_ not in self.ghostSkaterNums:
+                        rowSum += 1
                 if validHeat:
                     if realSkaterFound:
                         if skater_ not in skaters:
                             n_empty += 1
                     else:
                         n_empty += 1
-            pot += (rowSum - self.heatSize)**2 + n_empty**2
+            if rowSum > self.heatSize:
+                pot += (rowSum - self.heatSize)
+            if rowSum < self.minHeatSize:
+                pot += (rowSum - self.minHeatSize)**2
+            pot += n_empty**2
         return float(pot)
 
     def _heatUniquenessPotential(self,
@@ -704,15 +727,69 @@ class raceProgram():
         for sr_ in splittingRules[1:]:
             locc = min(max(0, int(np.rint(sr_))), maxloc)
             sr.append(locc)
+        appearances = {}
         for skater_ in sr[1:]:
-            subHeat.append(skaterList[skater_])
-            if len(subHeat) >= heatSize:
-                allHeats.append(subHeat)
-                subHeat = []
-        if len(subHeat) != 0:
-            while len(subHeat) < heatSize:
-                subHeat.append(self.initMatDefaultValue)
-            allHeats.append(subHeat)
+            if skater_ not in appearances:
+                appearances[skater_] = 0
+            appearances[skater_] += 1
+        for skater in range(len(skaterList)):
+            count = appearances[skater] if skater in appearances else 0
+            if count > self.numRacesPerSkater:
+                for _j in range(count - self.numRacesPerSkater):
+                    sr[1:].remove(skater)
+                    appearances[skater] -= 1
+            if count < self.numRacesPerSkater:
+                for _j in range(self.numRacesPerSkater - count):
+                    random_index = np.random.randint(0, len(sr[1:])) + 1
+                    sr.insert(random_index, skater)
+                    if skater not in appearances:
+                        appearances[skater] = 0
+                    appearances[skater] += 1
+        conflicts = []
+        for skater_ in sr[1:]:
+            if skaterList[skater_] in subHeat:
+                conflicts.append(skaterList[skater_])
+                continue
+            else:
+                subHeat.append(skaterList[skater_])
+                if len(subHeat) >= heatSize:
+                    allHeats.append(subHeat)
+                    subHeat = []
+                else:
+                    continue
+            conflictsLen = len(conflicts)
+            for j, clash in enumerate(conflicts[::-1]):
+                if clash not in subHeat:
+                    subHeat.append(clash)
+                    conflicts.pop(conflictsLen -j -1)
+                if len(subHeat) >= heatSize:
+                    allHeats.append(subHeat)
+                    subHeat = []
+        subHeat += conflicts
+        oldSubheatLen = 0
+        while len(subHeat) > 0:
+            otherHeats = list(range(len(allHeats)))
+            while len(otherHeats) < len(subHeat):
+                otherHeats += otherHeats
+            np.random.shuffle(otherHeats)
+            subHeatLen = len(subHeat)
+            for i, person in enumerate(subHeat[::-1]):
+                if person not in allHeats[otherHeats[i]]:
+                    allHeats[otherHeats[i]].append(person)
+                    subHeat.pop(subHeatLen-i-1)
+            largestHeatSize = 0
+            for heat in allHeats:
+                if len(heat) > largestHeatSize:
+                    largestHeatSize = len(heat)
+            for heat in allHeats:
+                while len(heat) < largestHeatSize:
+                    heat.append(self.initMatDefaultValue)
+            if len(subHeat) == oldSubheatLen:
+                break
+            oldSubheatLen = len(subHeat)
+            # while len(subHeat) < heatSize:
+            #     subHeat.append(self.initMatDefaultValue)
+            # allHeats.append(subHeat)
         self.currentHeatList = allHeats
         allHeats = np.asarray(allHeats)
         pot = self.heatPotentialCalc(
@@ -902,7 +979,8 @@ class raceProgram():
                                                            shift,
                                                            self.skaterDict,
                                                            n_attempts,
-                                                           logger=self.buildHeatsLogger)
+                                                           logger=self.buildHeatsLogger,
+                                                           minUniqueEncounters=self.minimumUniqueEncountersPerSkater)
             if tr == 0:
                 shift += 1
                 self.reorganizeHeats(heatDict)
@@ -1042,9 +1120,15 @@ class raceProgram():
                     'heatAllocationError: Skater {0} is not in heat {2}: {1}'.format(
                         skater_.skaterNum, self.heatDict[heatNum_]['heat'], heatNum_)
         if self.printDetails:
-            with open(os.path.join(self.printDetailsPath, 'heats_' +
-                                   datetime.now().strftime(self._dateTimeFormat)+'.json'), 'w') as fil:
+            fileSuffix = datetime.now().strftime(self._dateTimeFormat)
+            with open(os.path.join(self.printDetailsPath, 'heats_' +fileSuffix+'.json'), 'w') as fil:
                 json.dump(heatDict, fil, indent=4, cls=NpEncoder)
+            if self.printWinsportHeats:
+                with open(os.path.join(self.printDetailsPath, 'winsport_heats_' +fileSuffix+'.txt'), 'w') as fil:
+                    for key, competitors in heatDict.items():
+                        for competitor in competitors["heat"]:
+                            fil.writelines(f'{self.winsportEventName}, {str(key)}, {str(competitor)}\n')
+
 
         return heatDict
 
@@ -1303,27 +1387,7 @@ class raceProgram():
             if verbose and remainder >= self.totalSkaters:
                 print("sgp has produced a large remainder: {0}, consider changing heatSize.".format(
                     sgp.remainder))
-            highestKey = np.max(list(self.skaterDict.keys()))
-            highestSeed = 0
-            highestNum = 0
-            for x in self.skaterDict.values():
-                if x.skaterNum > highestNum:
-                    highestNum = x.skaterNum
-                if x.seed > highestSeed:
-                    highestSeed = x.seed
-
-            for ng in range(1, remainder+1):
-                self.skaterDict[highestKey +
-                                ng] = skater(highestKey + ng,
-                                             highestSeed + 1,
-                                             self.skaterDict[highestKey].team,
-                                             self.skaterDict[highestKey].ageCategory,
-                                             'ghost_'+str(ng)
-                                             )
-                self.skaterDict[highestKey + ng].isGhost = True
-            self.totalSkaters += remainder
-            self._checkParticipants()
-            self._runAveSeedingAndStdDev()
+            self._addGhostParticipants(remainder)
             sgp.__init__(self.totalSkaters, self.heatSize)
 
         out = sgp.groupAssignment()
@@ -1557,6 +1621,30 @@ class raceProgram():
             return heats
         return {}
 
+    def _addGhostParticipants(self, remainder):
+        highestKey = np.max(list(self.skaterDict.keys()))
+        highestSeed = 0
+        highestNum = 0
+        for x in self.skaterDict.values():
+            if x.skaterNum > highestNum:
+                highestNum = x.skaterNum
+            if x.seed > highestSeed:
+                highestSeed = x.seed
+
+        for ng in range(1, remainder+1):
+            self.skaterDict[highestKey +
+                                ng] = skater(highestKey + ng,
+                                             highestSeed + 1,
+                                             self.skaterDict[highestKey].team,
+                                             self.skaterDict[highestKey].ageCategory,
+                                             'ghost_'+str(ng)
+                                             )
+            self.skaterDict[highestKey + ng].isGhost = True
+            self.ghostSkaterNums.add(highestKey + ng)
+        self.totalSkaters += remainder
+        self._checkParticipants()
+        self._runAveSeedingAndStdDev()
+
     def _minimize(self,
                   verbose: bool = True,
                   max_attempts: int = 100) -> dict:
@@ -1564,7 +1652,7 @@ class raceProgram():
 
         initM = initializeList(self.totalSkaters,
                                self.numRacesPerSkater,
-                               self.heatSize,
+                               self.minHeatSize,
                                self.initMatDefaultValue)
 
         if max_attempts > 100:
@@ -1578,13 +1666,7 @@ class raceProgram():
         for sktr_ in list(chain(*initM)):
             if sktr_ != self.initMatDefaultValue:
                 locNotDefault.append(self.skaterNums.index(sktr_))
-        maxHeats = len(list(chain(*initM)))//2
-        if len(list(chain(*initM))) % 2 != 0:
-            maxHeats += 1
-        assert self.numRacesPerSkater < maxHeats, 'numRacesPerSkater too small, should be larger than {}.'.format(
-            maxHeats)
-        bounds = [(self.numRacesPerSkater, maxHeats)]
-        bounds += [(0, len(self.skaterNums)-1)]*len(locNotDefault)
+        bounds = self._getMinimizeBounds(initM, locNotDefault)
         locNotDefault = [len(initM)]+locNotDefault
         initPot = self.heatPotentialCalcList(
             locNotDefault)
@@ -1604,6 +1686,12 @@ class raceProgram():
         self._buildSkaterDict()
         success = False
         for n_attempts_ in range(max_attempts):
+            recalcBounds = False
+            if n_attempts_ > 0 and n_attempts_ % 10 == 0:
+                if verbose:
+                    print(f"Adding 1 ghost participant after {n_attempts_} attempts. New total skaters: {self.totalSkaters + 1}")
+                self._addGhostParticipants(1)
+                recalcBounds = True
             if n_attempts_ > 0:
                 # Give everything a new starting point.
                 initM = initializeList(self.totalSkaters,
@@ -1614,6 +1702,8 @@ class raceProgram():
                 for sktr_ in list(chain(*initM)):
                     if sktr_ != self.initMatDefaultValue:
                         locNotDefault.append(self.skaterNums.index(sktr_))
+                if recalcBounds:
+                    bounds = self._getMinimizeBounds(initM, locNotDefault)
                 locNotDefault = [len(initM)]+locNotDefault
             success = False
             n_attempts = n_attempts_ + 1
@@ -1657,7 +1747,8 @@ class raceProgram():
 
             tr = conTests.heatLengthTest(heatDict,
                                          n_attempts,
-                                         logger=self.buildHeatsLogger)
+                                         logger=self.buildHeatsLogger,
+                                         ghostSkaterList=list(self.ghostSkaterNums))
             if tr == 0:
                 for skater_ in self.skaterDict.values():
                     skater_.removeAllHeatAppearances()
@@ -1677,7 +1768,8 @@ class raceProgram():
                                                            shift,
                                                            self.skaterDict,
                                                            n_attempts,
-                                                           logger=self.buildHeatsLogger)
+                                                           logger=self.buildHeatsLogger,
+                                                           minUniqueEncounters=self.minimumUniqueEncountersPerSkater)
             self.n_encounterErrors = n_encounterErrors
             if tr == 0:
                 shift += 1
@@ -1705,3 +1797,13 @@ class raceProgram():
             return heatDict
         if heatDict is None or not success:
             return {}
+
+    def _getMinimizeBounds(self, initM: list, locNotDefault: list) -> list:
+        maxHeats = len(list(chain(*initM)))//2
+        if len(list(chain(*initM))) % 2 != 0:
+            maxHeats += 1
+        assert self.numRacesPerSkater < maxHeats, 'numRacesPerSkater too small, should be larger than {}.'.format(
+            maxHeats)
+        bounds = [(self.numRacesPerSkater, maxHeats)]
+        bounds += [(0, len(self.skaterNums)-1)]*len(locNotDefault)
+        return bounds
