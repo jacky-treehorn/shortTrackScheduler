@@ -22,7 +22,9 @@ VALIDARGS = {"totalSkaters": "int",
              "participantAgeGroup": "filePath", # For calls from winsport, do this later
              "participantSeeding": "filePath", # For calls from winsport, do this later
              "method": "str",
-             "runSimulation": "bool"
+             "runSimulation": "bool",
+             "winsportOutputFullPath": "str",
+             "winsportEventName": "str"
 }
 
 def yellowCardReset(raceProgram_: raceProgram,
@@ -86,44 +88,58 @@ if __name__ == "__main__":
     runSimulation = False
     if "runSimulation" in convertedArgDict and convertedArgDict["runSimulation"]:
         runSimulation = convertedArgDict["runSimulation"]
+    winsportOutputFullPath = ""
+    if "winsportOutputFullPath" in convertedArgDict:
+        winsportOutputFullPath = convertedArgDict["winsportOutputFullPath"]
     raceProgram_ = raceProgram(printDetails=True,
                                cleanCalculationDetails=True,
                                **convertedArgDict
                                )
-
-    heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
-                                       method=method)
+    try:
+        heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
+                                        method=method,
+                                        winsportOutputFullPath=winsportOutputFullPath)
+    except:
+        sys.exit(1)
     if len(heatDict) == 0:
-        input('No suitable heat structure could be found, press any key to exit.')
-        sys.exit()
+        if winsportOutputFullPath == "":
+            input('No suitable heat structure could be found, press any key to exit.')
+        sys.exit(1)
     if not runSimulation:
-        input('No simulation requested, press any key to exit')
-        sys.exit()
+        if winsportOutputFullPath == "":
+            input('No simulation requested, press any key to exit')
+        sys.exit(0)
     pa = pointsAllocation(raceProgram_.skaterDict,
                           verbose=True,
                           ratingMaximum=100.0)
     resultGenerator = Random()
 
-    for heatId, heat in heatDict.items():
-        heat_ = copy.copy(heat['heat'])
-        resultGenerator.shuffle(heat_)
-        heat_ = dict(zip(heat_, list(range(1, 1+len(heat_)))))
-        heat_ = randomPenaltyAdvancementMaker(heat_, resultGenerator)
-        heatTimes = {}
-        for key, result in heat_.items():
-            if result in pa.noTimePlacings:
-                continue
-            if result in ['a', 'A']:
-                heatTimes[key] = float(2) + 40.0
-            else:
-                heatTimes[key] = float(result) + 40.0
-        print('\n')
-        print('Heat {0} result: {1}'.format(heatId, heat_))
-        yellowCards = pa.allocatePoints(heat_, heatTimes, heatId)
-        if len(yellowCards) > 0:
-            heatDict = yellowCardReset(
-                raceProgram_, pa, yellowCards, heatId)
-        print('Intermediate results:\n')
-        raceProgram_.buildResultsTable(
-            intermediate=True, intermediatePrint=True, heatId=heatId)
-    resultsTable = raceProgram_.buildResultsTable()
+    try:
+        for heatId, heat in heatDict.items():
+            heat_ = copy.copy(heat['heat'])
+            resultGenerator.shuffle(heat_)
+            heat_ = dict(zip(heat_, list(range(1, 1+len(heat_)))))
+            heat_ = randomPenaltyAdvancementMaker(heat_, resultGenerator)
+            heatTimes = {}
+            for key, result in heat_.items():
+                if result in pa.noTimePlacings:
+                    continue
+                if result in ['a', 'A']:
+                    heatTimes[key] = float(2) + 40.0
+                else:
+                    heatTimes[key] = float(result) + 40.0
+            print('\n')
+            print('Heat {0} result: {1}'.format(heatId, heat_))
+            yellowCards = pa.allocatePoints(heat_, heatTimes, heatId)
+            if len(yellowCards) > 0:
+                heatDict = yellowCardReset(
+                    raceProgram_, pa, yellowCards, heatId)
+            print('Intermediate results:\n')
+            raceProgram_.buildResultsTable(
+                intermediate=True, intermediatePrint=True, heatId=heatId)
+        resultsTable = raceProgram_.buildResultsTable()
+    except:
+        sys.exit(1)
+    if winsportOutputFullPath == "":
+        input("Press any key to exit")
+    sys.exit(0)

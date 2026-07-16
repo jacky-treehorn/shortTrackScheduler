@@ -5,3 +5,5 @@
 /__pycache__/schedule.cpython-37.pyc
 /__pycache__/schedule.cpython-39.pyc
 calculationDetails/
+/dist
+/build

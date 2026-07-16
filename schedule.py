@@ -1029,7 +1029,8 @@ class raceProgram():
                    adjustAfterNAttempts: int = 500,
                    encounterFlexibility: int = 0,
                    verbose: bool = True,
-                   method: str = 'random_search') -> dict:
+                   method: str = 'random_search',
+                   winsportOutputFullPath: str = "") -> dict:
         """ Calculates a heat structure """
         assert method in ['sgp', 'random_search', 'minimize'], 'method must be either {}'.format(
             ['random_search', 'sgp', 'minimize'])
@@ -1123,11 +1124,16 @@ class raceProgram():
             fileSuffix = datetime.now().strftime(self._dateTimeFormat)
             with open(os.path.join(self.printDetailsPath, 'heats_' +fileSuffix+'.json'), 'w') as fil:
                 json.dump(heatDict, fil, indent=4, cls=NpEncoder)
-            if self.printWinsportHeats:
-                with open(os.path.join(self.printDetailsPath, 'winsport_heats_' +fileSuffix+'.txt'), 'w') as fil:
-                    for key, competitors in heatDict.items():
-                        for competitor in competitors["heat"]:
-                            fil.writelines(f'{self.winsportEventName}, {str(key)}, {str(competitor)}\n')
+        if self.printWinsportHeats:
+            outpath = 'winsport_heats_' +fileSuffix+'.txt'
+            if winsportOutputFullPath != "" and os.path.isdir(os.path.dirname(winsportOutputFullPath)):
+                if os.path.exists(winsportOutputFullPath):
+                    os.remove(winsportOutputFullPath)
+                outpath = winsportOutputFullPath
+            with open(os.path.join(self.printDetailsPath, outpath), 'w') as fil:
+                for key, competitors in heatDict.items():
+                    for competitor in competitors["heat"]:
+                        fil.writelines(f'{self.winsportEventName}, {str(key)}, {str(competitor)}\n')
 
 
         return heatDict
