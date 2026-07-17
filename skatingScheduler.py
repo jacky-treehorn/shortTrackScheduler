@@ -8,6 +8,8 @@ Dies ist eine temporäre Skriptdatei.
 from random import Random
 import copy
 import sys
+import os
+import json
 from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
 
@@ -23,7 +25,7 @@ VALIDARGS = {"totalSkaters": "int",
              "participantSeeding": "filePath", # For calls from winsport, do this later
              "method": "str",
              "runSimulation": "bool",
-             "winsportOutputFullPath": "str",
+             "winsportOutputFullPath": "filePath",
              "winsportEventName": "str"
 }
 
@@ -68,7 +70,24 @@ if __name__ == "__main__":
         if VALIDARGS[key] == "bool":
             convertedArgDict[key] = True if val.lower() in ["1", "true"] else False
         if VALIDARGS[key] == "filePath":
-            print("Not implemented yet")
+            if os.path.exists(os.path.dirname(val)):
+                if key == "winsportOutputFullPath":
+                    convertedArgDict[key] = val
+                    continue
+            if os.path.exists(val) and val.lower().endswith("json"):
+                object_ = None
+                try:
+                    with open(val, "r") as f:
+                        object_ = json.load(f)
+                except:
+                    continue
+                if object_ is None:
+                    continue
+                if key == "participantNames" and isinstance(object_, list):
+                    convertedArgDict[key] = object_
+                    continue
+                if isinstance(object_, dict):
+                    convertedArgDict[key] = object_
         if VALIDARGS[key] == "str":
             convertedArgDict[key] = val
 
