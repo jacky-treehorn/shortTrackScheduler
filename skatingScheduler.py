@@ -12,8 +12,11 @@ import os
 import json
 from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
+import time
 
-VALIDARGS = {"totalSkaters": "int",
+VALIDARGS = {
+             "winsportInput": "filePath",
+             "totalSkaters": "int",
              "numRacesPerSkater": "int",
              "heatSize": "int",
              "considerSeeding": "bool",
@@ -28,6 +31,62 @@ VALIDARGS = {"totalSkaters": "int",
              "winsportOutputFullPath": "filePath",
              "winsportEventName": "str"
 }
+
+def readInWinsportInput(winsportInput: str) ->dict:
+    if not os.path.exists(winsportInput):
+        return {}
+    argumentDict = {}
+    totalSkaters = 0
+    with open(winsportInput, "r") as f:
+        skaterInputsFound = False
+        category = ""
+        for line in f.readlines():
+            line_ = line.split(",")
+            for i, thing in enumerate(line_[::-1]):
+                try:
+                    thing_ = eval(thing)
+                    line_[-i-1] = thing_
+                except:
+                    continue
+
+            try:
+                if skaterInputsFound:
+                    totalSkaters += 1
+                    name = line_[3]+", "+line_[2]
+                    copies = 0
+                    while name in argumentDict["participantNames"]:
+                        if name+"_"+str(copies) in argumentDict["participantNames"]:
+                            copies += 1
+                            continue
+                        name = name+"_"+str(copies)
+                        break
+                    argumentDict["participantNames"].append(name)
+                    argumentDict["participantTeams"][argumentDict["participantNames"][-1]] = line_[4]
+                    argumentDict["participantAgeGroup"][argumentDict["participantNames"][-1]] = category
+                    argumentDict["participantSeeding"][argumentDict["participantNames"][-1]] = line_[11]
+                    while line_[1] in argumentDict["participantNumberMap"].values():
+                        line_[1] += 1
+                    argumentDict["participantNumberMap"][totalSkaters-1] = line_[1]
+                if line_[0].lower() == "var01":
+                    argumentDict["winsportEventName"] = line_[1]
+                if line_[0].lower() == "var08":
+                    argumentDict["numRacesPerSkater"] = line_[1]
+                if line_[0].lower() == "var03":
+                    category = line_[1]
+                if line_[0].lower() == "var14":
+                    skaterInputsFound = True
+                    argumentDict["participantNames"] = []
+                    argumentDict["participantTeams"] = {}
+                    argumentDict["participantAgeGroup"] = {}
+                    argumentDict["participantSeeding"] = {}
+                    argumentDict["participantNumberMap"] = {}
+                    continue
+            except Exception as e:
+                print("Failed to parse Winsport file, error: ", str(e))
+                time.sleep(3)
+                sys.exit(1)
+    argumentDict["totalSkaters"] = totalSkaters
+    return argumentDict
 
 def yellowCardReset(raceProgram_: raceProgram,
                     pointsAllocation_: pointsAllocation,
@@ -64,6 +123,7 @@ if __name__ == "__main__":
             else:
                 val = None
     convertedArgDict = {}
+    winsportInputDict = {}
     for key, val in argDict.items():
         if VALIDARGS[key] == "int":
             convertedArgDict[key] = int(val)
@@ -74,23 +134,26 @@ if __name__ == "__main__":
                 if key == "winsportOutputFullPath":
                     convertedArgDict[key] = val
                     continue
-            if os.path.exists(val) and val.lower().endswith("json"):
-                object_ = None
-                try:
-                    with open(val, "r") as f:
-                        object_ = json.load(f)
-                except:
-                    continue
-                if object_ is None:
-                    continue
-                if key == "participantNames" and isinstance(object_, list):
-                    convertedArgDict[key] = object_
-                    continue
-                if isinstance(object_, dict):
-                    convertedArgDict[key] = object_
+            if os.path.exists(val):
+                if key == "winsportInput":
+                    winsportInputDict = readInWinsportInput(val)
+                if val.lower().endswith("json"):
+                    object_ = None
+                    try:
+                        with open(val, "r") as f:
+                            object_ = json.load(f)
+                    except:
+                        continue
+                    if object_ is None:
+                        continue
+                    if key == "participantNames" and isinstance(object_, list):
+                        convertedArgDict[key] = object_
+                        continue
+                    if isinstance(object_, dict):
+                        convertedArgDict[key] = object_
         if VALIDARGS[key] == "str":
             convertedArgDict[key] = val
-
+    convertedArgDict.update(winsportInputDict)
     if debug:
         convertedArgDict["totalSkaters"] = 22
         convertedArgDict["numRacesPerSkater"] = 4
@@ -116,8 +179,9 @@ if __name__ == "__main__":
                                )
     try:
         heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
-                                        method=method,
-                                        winsportOutputFullPath=winsportOutputFullPath)
+                                           method=method,
+                                           winsportOutputFullPath=winsportOutputFullPath,
+                                           winsportSkaterNumberMap = convertedArgDict["participantNumberMap"] if "participantNumberMap" in convertedArgDict else {})
     except:
         sys.exit(1)
     if len(heatDict) == 0:

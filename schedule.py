@@ -327,7 +327,7 @@ class convergenceTests():
                 if np.abs(enctr - allEncounters[j]) > shift:
                     encountersError = True
                     break
-        encountersError = encountersError and any((x.totalUniqueEncounters < minUniqueEncounters for x in skaterDict.values() if not x.isGhost))
+        encountersError = encountersError or any((x.totalUniqueEncounters < minUniqueEncounters for x in skaterDict.values() if not x.isGhost))
         if encountersError:
             n_encounterErrors += 1
             if self.verbose:
@@ -462,26 +462,32 @@ class raceProgram():
 
         if len(self.participantTeams) > 0:
             for key in self.participantTeams.keys():
-                assert key in self.participantNames.keys(), \
+                assert key in self.participantNames, \
                     '{} in participantTeams not found in participantNames'.format(
                         key)
 
         if len(self.participantAgeGroup) > 0:
             for key in self.participantAgeGroup.keys():
-                assert key in self.participantNames.keys(), \
+                assert key in self.participantNames, \
                     '{} in participantAgeGroup not found in participantNames'.format(
                         key)
 
         if len(self.participantSeeding) > 0:
-            assert len(self.participantSeeding) == self.totalSkaters, \
-                'Length of participant seeding does not match the number of skaters!'
-            for key in self.participantSeeding.keys():
-                assert key in self.participantNames.keys(),  \
-                    '{} in participantSeeding not found in participantNames'.format(
-                        key)
-            assert set(self.participantSeeding.values()) == set(list(range(1, self.totalSkaters + 1))), \
-                'Seeding should only contain sequential numbers from {0} to {1}'.format(
-                    1, self.totalSkaters)
+            try:
+                assert len(self.participantSeeding) == self.totalSkaters, \
+                    'Length of participant seeding does not match the number of skaters!'
+                for key in self.participantSeeding.keys():
+                    assert key in self.participantNames,  \
+                        '{} in participantSeeding not found in participantNames'.format(
+                            key)
+                assert set(self.participantSeeding.values()) == set(list(range(1, self.totalSkaters + 1))), \
+                    'Seeding should only contain sequential numbers from {0} to {1}'.format(
+                        1, self.totalSkaters)
+            except Exception as e:
+                print(e)
+                print("Clearing seeding.")
+                self.participantSeeding = {}
+                self.considerSeeding = False
 
     def _cleanCalculationDetails(self):
         if os.path.exists(self.printDetailsPath):
@@ -1030,7 +1036,8 @@ class raceProgram():
                    encounterFlexibility: int = 0,
                    verbose: bool = True,
                    method: str = 'random_search',
-                   winsportOutputFullPath: str = "") -> dict:
+                   winsportOutputFullPath: str = "",
+                   winsportSkaterNumberMap: dict = {}) -> dict:
         """ Calculates a heat structure """
         assert method in ['sgp', 'random_search', 'minimize'], 'method must be either {}'.format(
             ['random_search', 'sgp', 'minimize'])
@@ -1133,7 +1140,10 @@ class raceProgram():
             with open(os.path.join(self.printDetailsPath, outpath), 'w') as fil:
                 for key, competitors in heatDict.items():
                     for competitor in competitors["heat"]:
-                        fil.writelines(f'{self.winsportEventName}, {str(key)}, {str(competitor)}\n')
+                        lineToWrite = f'{self.winsportEventName}, {str(key)}, {str(competitor)}\n'
+                        if competitor in winsportSkaterNumberMap:
+                            lineToWrite = f'{self.winsportEventName}, {str(key)}, {str(competitor)}, {str(winsportSkaterNumberMap[competitor])}\n'
+                        fil.writelines(lineToWrite)
 
 
         return heatDict
@@ -1235,12 +1245,11 @@ class raceProgram():
                 mostAdvantagedSkater = skater_
         stddev = np.sqrt(
             sum([(x - self._laneAverage)**2 for x in allValues]))/len(allValues)
-
         lowestValueIndex = np.argmin(np.asarray(
             skaterDict[mostDisadvantagedSkater]['values']))
         correspondingHeat = skaterDict[mostDisadvantagedSkater]['heatNum'][lowestValueIndex]
         n_stddevIncreases = 0
-        permitted_n_stddevIncreases = 50
+        permitted_n_stddevIncreases = 256
         shift = -2
         heatDict_ = copy.copy(heatDict)
         while True:
@@ -1290,7 +1299,7 @@ class raceProgram():
                 lowestValueIndex = np.argmin(np.asarray(
                     skaterDict[mostDisadvantagedSkater]['values']))
                 correspondingHeat = skaterDict[mostDisadvantagedSkater]['heatNum'][lowestValueIndex]
-                shift = -1
+                # shift = -1
             elif newStddev == stddev:
                 n_stddevIncreases += 1
                 if n_stddevIncreases >= permitted_n_stddevIncreases:
@@ -1327,6 +1336,7 @@ class raceProgram():
         if verbose:
             print('Assumed start lane values: ', self._laneValues)
             print('Stddev of start lane values: ', newStddev)
+            print('Average of start lane values: ',self._laneAverage)
         self.startLaneStddev = newStddev
         for skater_, value in skaterDict.items():
             self.skaterDict[skater_]._startPositionValues = value['values']
