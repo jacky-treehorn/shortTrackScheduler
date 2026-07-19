@@ -1608,6 +1608,7 @@ class raceProgram():
                 if len(heat['heat']) > longestHeatLength:
                     longestHeatLength = len(heat['heat'])
             heatAsArray = np.zeros((len(heats), longestHeatLength))
+            heatAsArray = heatAsArray + self.initMatDefaultValue
             for heatInd, heat in enumerate(heats.values()):
                 heatAsArray[heatInd, :len(heat['heat'])] = heat['heat']
             heatScore_ = self.heatPotentialCalc(heatAsArray, heatAsArray.shape)
