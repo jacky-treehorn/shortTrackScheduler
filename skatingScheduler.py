@@ -118,8 +118,11 @@ if __name__ == "__main__":
             if val is None:
                 val = runArg
                 continue
-            if key is None and runArg.startswith("--") and runArg[2:] in VALIDARGS:
-                key = runArg[2:]
+            if key is None and runArg.startswith("--") and runArg[2:].lower() in [x.lower() for x in VALIDARGS.keys()]:
+                for x in VALIDARGS.keys():
+                    if runArg[2:].lower() == x.lower():
+                        key = x
+                        break
             else:
                 val = None
     convertedArgDict = {}
