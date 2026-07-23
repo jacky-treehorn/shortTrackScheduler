@@ -185,7 +185,8 @@ if __name__ == "__main__":
                                            method=method,
                                            winsportOutputFullPath=winsportOutputFullPath,
                                            winsportSkaterNumberMap = convertedArgDict["participantNumberMap"] if "participantNumberMap" in convertedArgDict else {})
-    except:
+    except Exception as e:
+        print(str(e))
         sys.exit(1)
     if len(heatDict) == 0:
         if winsportOutputFullPath == "":

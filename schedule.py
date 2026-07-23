@@ -17,6 +17,14 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import dual_annealing
 
+PRIMES_GF2 = {
+    1: 0b11,  # s=2  (x + 1)
+    2: 0b111,  # s=4  (x^2 + x + 1)
+    3: 0b1011,  # s=8  (x^3 + x + 1)
+    4: 0b10011,  # s=16 (x^4 + x + 1)
+    5: 0b100101,  # s=32 (x^5 + x^2 + 1)
+    6: 0b1000011,  # s=64 (x^6 + x + 1)
+}
 
 class NpEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -116,8 +124,25 @@ def kroneckerDelta(x: int,
         out = 1
     return float(out)
 
+def NCMul(a: int, b: int, s: int) -> int:
+    if not is_power_of_two(s):
+        return (a * b) % s
+
+    k = s.bit_length() - 1
+    poly = PRIMES_GF2[k]
+    res = 0
+    while b > 0:
+        if b & 1:
+            res ^= a
+        a <<= 1
+        if a & s:
+            a ^= poly
+        b >>= 1
+    return res
 
 def NCAdd(a: int, b: int, s: int) -> int:
+    if is_power_of_two(s):
+        return a ^ b
     n = 0
     c = 0
     while (a > 0 or b > 0):
@@ -127,6 +152,8 @@ def NCAdd(a: int, b: int, s: int) -> int:
         b = b // s
     return c
 
+def is_power_of_two(s: int) -> bool:
+    return s > 1 and (s & (s - 1)) == 0
 
 def recommendedSeedingOrder(heatMatrix: np.array,
                             heatIds: list) -> list:
@@ -186,6 +213,7 @@ class socialGolferProblem():
         self.heatSize = heatSize
         self.n_power = 0
         self.remainder = self.n_participants - 1
+        self.b_groupSizePowerOfTwo = is_power_of_two(self.heatSize)
         while (self.heatSize**self.n_power < self.n_participants):
             remainder = self.heatSize**(self.n_power + 1) - self.n_participants
             if np.abs(remainder) < np.abs(self.remainder):
@@ -201,7 +229,39 @@ class socialGolferProblem():
                 out.append(self.heatSize**(nn - 1) + m)
         return out
 
+    def groupAssignmentPowersOfTwo(self) -> np.ndarray:
+        n_participants = self.heatSize**self.n_power
+        n_rounds = (self.heatSize**self.n_power - 1) // (self.heatSize - 1)
+        groups_per_round = self.heatSize ** (self.n_power - 1)
+        directions = [(0, 1)] + [(1, m) for m in range(self.heatSize)]
+        bt = np.zeros((n_participants, n_rounds), dtype=int)
+        for j, (dx, dy) in enumerate(directions):
+            group_offset = 1 + j * self.heatSize
+            visited = set()
+
+            for g in range(groups_per_round):
+                for start_id in range(n_participants):
+                    if start_id not in visited:
+                        break
+
+                x0, y0 = start_id // self.heatSize, start_id % self.heatSize
+
+                for t in range(self.heatSize):
+                    tx = NCMul(t, dx, self.heatSize)
+                    ty = NCMul(t, dy, self.heatSize)
+
+                    x = NCAdd(x0, tx, self.heatSize)
+                    y = NCAdd(y0, ty, self.heatSize)
+
+                    participant = x * self.heatSize + y
+                    bt[participant, j] = group_offset + g
+                    visited.add(participant)
+
+        return bt.astype(int)
+
     def groupAssignment(self) -> np.array:
+        if is_power_of_two(self.heatSize):
+            return self.groupAssignmentPowersOfTwo()
         bt = np.zeros((self.heatSize**self.n_power,
                       (self.heatSize**self.n_power - 1)//(self.heatSize - 1)))
         rval = self.distanceToNext()
@@ -221,11 +281,13 @@ class socialGolferProblem():
         initLength = 0
         for col in range(sgpMatrix.shape[1]):
             persons = list(range(sgpMatrix.shape[0]))
-            Random().shuffle(persons)
+            # Random().shuffle(persons)
             for person in persons:
                 if person >= self.n_participants:
                     continue
                 hKey = int(sgpMatrix[person, col]+col*self.heatSize)
+                if self.b_groupSizePowerOfTwo:
+                    hKey = int(sgpMatrix[person, col])
                 if hKey in heats.keys():
                     if person in heats[hKey]:
                         continue
@@ -1444,6 +1506,8 @@ class raceProgram():
                         try:
                             assert hsTol == 1
                             hKey = int(out[person, col] + col*self.heatSize)
+                            if sgp.b_groupSizePowerOfTwo:
+                                hKey = int(out[person, col])
                             while usedHKs.count(hKey) >= self.heatSize:
                                 hKey += 1
                                 if hKey not in usedHKs:
@@ -1632,13 +1696,24 @@ class raceProgram():
             heatScore_ = self.heatPotentialCalc(heatAsArray, heatAsArray.shape)
             if heatScore < 0.0:
                 heatScore = heatScore_
-                bestHeats = copy.copy(heats)
-                bestSkaterDict = copy.copy(self.skaterDict)
+                bestHeats = {}
+                for k, v in heats.items(): bestHeats[k] =  copy.copy(v)
+                bestSkaterDict = {}
+                for k, v in self.skaterDict.items(): bestSkaterDict[k] =  copy.copy(v)
             else:
                 if heatScore_ < heatScore and not any((x.totalUniqueEncounters < self.minimumUniqueEncountersPerSkater for x in self.skaterDict.values())):
                     heatScore = heatScore_
-                    bestHeats = copy.copy(heats)
-                    bestSkaterDict = copy.copy(self.skaterDict)
+                    bestHeats = {}
+                    for k, v in heats.items(): bestHeats[k] = copy.copy(v)
+                    bestSkaterDict = {}
+                    for k, v in self.skaterDict.items(): bestSkaterDict[k] =  copy.copy(v)
+            for i, skater_ in self.skaterDict.items():
+                for ha in skater_.heatAppearances:
+                    if i in heats[ha]['heat']:
+                        continue
+                    else:
+                        print("Skater appearance ", ha, "not visible in heat: ", heats[ha])
+
             if totalAttempts > 1 and n_attempts < totalAttempts - 1:
                 for skater_ in self.skaterDict.values():
                     skater_.removeAllHeatAppearances()
@@ -1653,7 +1728,7 @@ class raceProgram():
             if self.printDetails:
                 self.buildHeatsLogger.info('Heat Score: %s', heatScore)
             self.skaterDict = bestSkaterDict
-            heats = bestHeats
+            heats = bestHeats            
             return heats
         return {}
 
