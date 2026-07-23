@@ -13,6 +13,7 @@ import json
 from pointsAllocator import pointsAllocation, randomPenaltyAdvancementMaker
 from schedule import raceProgram
 import time
+import numpy as np
 
 VALIDARGS = {
              "winsportInput": "filePath",
@@ -106,6 +107,7 @@ def yellowCardReset(raceProgram_: raceProgram,
 
 if __name__ == "__main__":
     debug = False
+    gridTest = False
     argDict = {}
     val = None
     key = None
@@ -176,17 +178,39 @@ if __name__ == "__main__":
     winsportOutputFullPath = ""
     if "winsportOutputFullPath" in convertedArgDict:
         winsportOutputFullPath = convertedArgDict["winsportOutputFullPath"]
+    gridTestTotalSkatersMax = convertedArgDict["totalSkaters"]*2
+    gridTestNumRacesPerSkaterMax = convertedArgDict["numRacesPerSkater"]*2
+    gridTestHeatSizeMax = convertedArgDict["heatSize"]*2
+    x, y, z = np.mgrid[convertedArgDict["totalSkaters"]:gridTestTotalSkatersMax,
+                       convertedArgDict["numRacesPerSkater"]:gridTestNumRacesPerSkaterMax,
+                       convertedArgDict["heatSize"]:gridTestHeatSizeMax]
+    coords_mgrid = list(np.vstack([x.ravel(), y.ravel(), z.ravel()]).T)
     raceProgram_ = raceProgram(printDetails=True,
                                cleanCalculationDetails=True,
                                **convertedArgDict
                                )
     try:
-        heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
-                                           method=method,
-                                           winsportOutputFullPath=winsportOutputFullPath,
-                                           winsportSkaterNumberMap = convertedArgDict["participantNumberMap"] if "participantNumberMap" in convertedArgDict else {})
+        while True:
+            heatDict = raceProgram_.buildHeats(adjustAfterNAttempts=2000,
+                                               method=method,
+                                               winsportOutputFullPath=winsportOutputFullPath,
+                                               winsportSkaterNumberMap = convertedArgDict["participantNumberMap"] if "participantNumberMap" in convertedArgDict else {})
+            if not gridTest:
+                break
+            if not coords_mgrid:
+                break
+            newCoords = coords_mgrid.pop(0)
+            convertedArgDict["totalSkaters"] = int(newCoords[0])
+            convertedArgDict["numRacesPerSkater"] = int(newCoords[1])
+            convertedArgDict["heatSize"] = int(newCoords[2])
+            convertedArgDict["minHeatSize"] = int(newCoords[2])
+            print(convertedArgDict["totalSkaters"], convertedArgDict["numRacesPerSkater"], convertedArgDict["heatSize"])
+            raceProgram_.__init__(printDetails=True,
+                                  cleanCalculationDetails=True,
+                                  **convertedArgDict)
     except Exception as e:
         print(str(e))
+        print(convertedArgDict)
         sys.exit(1)
     if len(heatDict) == 0:
         if winsportOutputFullPath == "":

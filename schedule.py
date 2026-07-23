@@ -17,6 +17,32 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import dual_annealing
 
+EXACT_SGP_COMBINATIONS = [
+    [2,4,3],
+    [3,9,4],
+    [4,16,5],
+    [5,25,6],
+    [7,49,8],
+    [8,64,9],
+    [9,81,10],
+    [11,121,12],
+    [13,169,14],
+    [16,256,17],
+    [3,15,7],
+    #[3,21,10], These commented cases require look up tables
+    [3,27,13],
+    #[3,33,16],
+    #[3,39,19],
+    #[4,28,9],
+    #[4,40,13],
+    #[4,52,17],
+    [4,64,21],
+    #[5,45,11],
+    #[5,65,16],
+    #[5,85,21],
+    [5,125,31]
+]
+
 PRIMES_GF2 = {
     1: 0b11,  # s=2  (x + 1)
     2: 0b111,  # s=4  (x^2 + x + 1)
@@ -25,6 +51,70 @@ PRIMES_GF2 = {
     5: 0b100101,  # s=32 (x^5 + x^2 + 1)
     6: 0b1000011,  # s=64 (x^6 + x + 1)
 }
+
+def solve_kirkman_general(N: int) -> np.ndarray:
+    bt = None
+    if N == 9:
+        heats = np.asarray(
+            [[0, 1, 2], [3, 4, 5], [6, 7, 8],
+            [0, 3, 6], [1, 4, 7], [2, 5, 8],
+            [0, 4, 8], [1, 5, 6], [2, 3, 7],
+            [0, 5, 7], [1, 3, 8], [2, 4, 6]]
+        ).astype(int)
+    if N == 15:
+        heats = np.asarray([[0, 1, 2], [3, 7, 11], [4, 9, 14], [5, 10, 12], [6, 8, 13],
+            [0, 3, 4], [1, 7, 9],  [2, 12, 13], [5, 8, 14], [6, 10, 11],
+            [0, 5, 6], [1, 8, 10], [2, 11, 14], [3, 9, 13], [4, 7, 12],
+            [0, 7, 8], [1, 11, 13], [2, 4, 5],  [3, 10, 14], [6, 9, 12],
+            [0, 9, 10], [1, 12, 14], [2, 3, 6],  [4, 8, 11], [5, 7, 13],
+            [0, 11, 12], [1, 3, 5],  [2, 8, 9],  [4, 10, 13], [6, 7, 14],
+            [0, 13, 14], [1, 4, 6],  [2, 7, 10], [3, 8, 12], [5, 9, 11]]).astype(int)
+    bt = np.zeros((N, list(heats.flatten()).count(0)), dtype=int)
+    if N == 27:
+        return solve_affine_3d(3)
+    participantCounts = {}
+    for i, participant in enumerate(heats.flatten()):
+        if participant not in participantCounts:
+            participantCounts[participant] = 0
+        bt[participant, participantCounts[participant]] = i // 3
+        participantCounts[participant] += 1
+    return bt
+    
+
+def solve_affine_3d(s: int) -> np.ndarray:
+    n_participants = s**3
+    n_rounds = (s**3 - 1) // (s - 1)
+    groups_per_round = s**2
+
+    dirs = (
+        [(0, 0, 1)]
+        + [(0, 1, m2) for m2 in range(s)]
+        + [(1, m1, m2) for m1 in range(s) for m2 in range(s)]
+    )
+
+    bt = np.zeros((n_participants, n_rounds), dtype=int)
+
+    for j, (dx, dy, dz) in enumerate(dirs):
+        group_offset = 1 + j * groups_per_round
+        visited = set()
+
+        for g in range(groups_per_round):
+            for start_id in range(n_participants):
+                if start_id not in visited:
+                    break
+
+            x0, y0, z0 = start_id // (s**2), (start_id // s) % s, start_id % s
+
+            for t in range(s):
+                x = NCAdd(x0, NCMul(t, dx, s), s)
+                y = NCAdd(y0, NCMul(t, dy, s), s)
+                z = NCAdd(z0, NCMul(t, dz, s), s)
+
+                participant = x * (s**2) + y * s + z
+                bt[participant, j] = group_offset + g
+                visited.add(participant)
+
+    return bt.astype(int)
 
 class NpEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -214,6 +304,8 @@ class socialGolferProblem():
         self.n_power = 0
         self.remainder = self.n_participants - 1
         self.b_groupSizePowerOfTwo = is_power_of_two(self.heatSize)
+        self.affine_3d_case = self.n_participants == self.heatSize**3
+        self.kirkman_general_case = self.heatSize == 3 and self.n_participants % 6 == 3
         while (self.heatSize**self.n_power < self.n_participants):
             remainder = self.heatSize**(self.n_power + 1) - self.n_participants
             if np.abs(remainder) < np.abs(self.remainder):
@@ -262,6 +354,10 @@ class socialGolferProblem():
     def groupAssignment(self) -> np.array:
         if is_power_of_two(self.heatSize):
             return self.groupAssignmentPowersOfTwo()
+        elif self.affine_3d_case:
+            return solve_affine_3d(self.heatSize)
+        elif self.kirkman_general_case:
+            return solve_kirkman_general(self.n_participants)
         bt = np.zeros((self.heatSize**self.n_power,
                       (self.heatSize**self.n_power - 1)//(self.heatSize - 1)))
         rval = self.distanceToNext()
@@ -286,7 +382,7 @@ class socialGolferProblem():
                 if person >= self.n_participants:
                     continue
                 hKey = int(sgpMatrix[person, col]+col*self.heatSize)
-                if self.b_groupSizePowerOfTwo:
+                if self.b_groupSizePowerOfTwo or self.kirkman_general_case or self.affine_3d_case:
                     hKey = int(sgpMatrix[person, col])
                 if hKey in heats.keys():
                     if person in heats[hKey]:
@@ -445,7 +541,17 @@ class raceProgram():
                  winsportEventName: str = "winsportEvent0",
                  **kwargs
                  ):
+        self.exactSGBcombination = [heatSize, totalSkaters, numRacesPerSkater] in EXACT_SGP_COMBINATIONS
         logging.shutdown()
+        self.numRacesPerSkater = numRacesPerSkater
+        while (self.numRacesPerSkater*(heatSize - 1) >= totalSkaters):
+            self.numRacesPerSkater -= 1
+        if self.numRacesPerSkater <= 1:
+            self.numRacesPerSkater = numRacesPerSkater
+            while (self.numRacesPerSkater*(heatSize - 1) >= totalSkaters) and heatSize > 2:
+                heatSize -= 1
+                if heatSize <= minHeatSize:
+                    minHeatSize -= 1
         self.ghostSkaterNums = set()
         self.winsportEventName = winsportEventName
         self.printWinsportHeats = printWinsportHeats
@@ -468,11 +574,11 @@ class raceProgram():
         self.heats = []
         self.numRacesPerSkater = numRacesPerSkater
         assert self.numRacesPerSkater >= 0, 'numRaces must be greater than or equal to 0.'
-        self.heatSize = heatSize
+        self.heatSize = max(heatSize, minHeatSize)
         assert self.heatSize > 1, 'Heat size must be at least 2.'
         self.considerSeeding = considerSeeding
         self.fairStartLanes = fairStartLanes
-        self.minHeatSize = minHeatSize
+        self.minHeatSize = min(heatSize, minHeatSize)
         assert self.minHeatSize > 1, 'Minimum heat size must be at least 2.'
         assert self.heatSize >= self.minHeatSize, \
             'Heat size must be at least {}.'.format(self.minHeatSize)
@@ -1106,6 +1212,8 @@ class raceProgram():
         """ Calculates a heat structure """
         assert method in ['sgp', 'random_search', 'minimize'], 'method must be either {}'.format(
             ['random_search', 'sgp', 'minimize'])
+        if self.exactSGBcombination:
+            method = 'sgp'
         adjustAfterNAttempts = min(max_attempts, adjustAfterNAttempts)
         if self.numRacesPerSkater == 0:
             while self.totalSkaters / 2**self.numRacesPerSkater > self.heatSize:
@@ -1474,6 +1582,7 @@ class raceProgram():
         out = sgp.groupAssignment()
         M, heats_pure_sgp = sgp.sgpMatrixToHeats(out)
         heats_pure_sgp_ = []
+        longestHeat = 0
         for x in heats_pure_sgp.values():
             heat_ = []
             for skaterNum in x:
@@ -1481,7 +1590,12 @@ class raceProgram():
                     heat_.append(self.initMatDefaultValue)
                     continue
                 heat_.append(skaterNum)
+            if len(heat_) > longestHeat:
+                longestHeat = len(heat_)
             heats_pure_sgp_.append(heat_)
+        for thing in heats_pure_sgp_:
+            while len(thing) < longestHeat:
+                thing.append(self.initMatDefaultValue)
         heats_pure_sgp_ = np.asarray(heats_pure_sgp_)
         sgpPureHeatScore = self.heatPotentialCalc(heats_pure_sgp_, heats_pure_sgp_.shape)
         totalAttempts = 1
@@ -1506,7 +1620,7 @@ class raceProgram():
                         try:
                             assert hsTol == 1
                             hKey = int(out[person, col] + col*self.heatSize)
-                            if sgp.b_groupSizePowerOfTwo:
+                            if sgp.b_groupSizePowerOfTwo or sgp.affine_3d_case or sgp.kirkman_general_case:
                                 hKey = int(out[person, col])
                             while usedHKs.count(hKey) >= self.heatSize:
                                 hKey += 1
@@ -1673,6 +1787,8 @@ class raceProgram():
                     heatSizeOverhang += 1
                 for skater_ in emplacedSkaters:
                     smallHeats.remove(skater_)
+                if heatSizeOverhang >= 3:
+                    break
             for hk, heat_ in heats.items():
                 heat = heat_['heat']
                 for skater_ in heat:
