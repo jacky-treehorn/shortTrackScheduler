@@ -214,7 +214,7 @@ class socialGolferProblem():
         return bt.astype(int)
 
     def sgpMatrixToHeats(self,
-                         sgpMatrix: np.array) -> np.array:
+                         sgpMatrix: np.array):
         heats = {}
         heatMatrix = []
         column = []
@@ -245,7 +245,7 @@ class socialGolferProblem():
                 initLength = len(column)
                 heatMatrix.append(column)
                 column = []
-        return np.asarray(heatMatrix).transpose()
+        return np.asarray(heatMatrix).transpose(), heats
 
 
 class convergenceTests():
@@ -648,8 +648,11 @@ class raceProgram():
             # if all((x < 0 for x in heatMat[i, :])):
             #     continue
             validHeat = False
+            n_realSkaters = 0
             for y in heatMat[i, :]:
                 if y in skaters:
+                    n_realSkaters += 1
+                if n_realSkaters >= self.minHeatSize:
                     validHeat = True
                     break
             realSkaterFound = False
@@ -668,7 +671,7 @@ class raceProgram():
             if rowSum > self.heatSize:
                 pot += (rowSum - self.heatSize)
             if rowSum < self.minHeatSize:
-                pot += (rowSum - self.minHeatSize)**2
+                pot += (1 + self.minHeatSize - rowSum)**2
             pot += n_empty**2
         return float(pot)
 
@@ -1407,7 +1410,18 @@ class raceProgram():
             sgp.__init__(self.totalSkaters, self.heatSize)
 
         out = sgp.groupAssignment()
-        M = sgp.sgpMatrixToHeats(out)
+        M, heats_pure_sgp = sgp.sgpMatrixToHeats(out)
+        heats_pure_sgp_ = []
+        for x in heats_pure_sgp.values():
+            heat_ = []
+            for skaterNum in x:
+                if self.skaterDict[skaterNum].isGhost:
+                    heat_.append(self.initMatDefaultValue)
+                    continue
+                heat_.append(skaterNum)
+            heats_pure_sgp_.append(heat_)
+        heats_pure_sgp_ = np.asarray(heats_pure_sgp_)
+        sgpPureHeatScore = self.heatPotentialCalc(heats_pure_sgp_, heats_pure_sgp_.shape)
         totalAttempts = 1
         numRacesPerSkater_shift = -1
         if self.considerSeeding:
@@ -1429,10 +1443,14 @@ class raceProgram():
                     for person in persons:
                         try:
                             assert hsTol == 1
-                            hKey = int(out[person, col])
-                            if hKey in usedHKs:
-                                hKey += (usedHKs.count(hKey) //
-                                         self.heatSize)*self.heatSize
+                            hKey = int(out[person, col] + col*self.heatSize)
+                            while usedHKs.count(hKey) >= self.heatSize:
+                                hKey += 1
+                                if hKey not in usedHKs:
+                                    break
+                            # if hKey in usedHKs:
+                            #     hKey += (usedHKs.count(hKey) //
+                            #              self.heatSize)*self.heatSize
                         except:
                             if usedHKs:
                                 breakFound = False
@@ -1467,8 +1485,8 @@ class raceProgram():
                                            'averageSeeding': 0}
                         usedHKs.append(hKey)
                 if len(usedHKs) == luhk:
-                    hsTol += 1
-                if hsTol >= 4:
+                #     hsTol += 1
+                # if hsTol >= 4:
                     if permitChangeInNumberRaces:
                         self.numRacesPerSkater += numRacesPerSkater_shift
                         if self.numRacesPerSkater <= 1:
@@ -1484,7 +1502,7 @@ class raceProgram():
                         skater_.removeAllHeatAppearances()
                     heats = {}
                     usedHKs = []
-                    hsTol = 1
+                    # hsTol = 1
                     if verbose:
                         print(
                             'WARNING! no good configuration for numRacesPerSkater, reducing...')
@@ -1631,6 +1649,7 @@ class raceProgram():
                 continue
             if verbose:
                 print('Heat Score: {}'.format(heatScore))
+                print("Pure SGP heat score:", sgpPureHeatScore)
             if self.printDetails:
                 self.buildHeatsLogger.info('Heat Score: %s', heatScore)
             self.skaterDict = bestSkaterDict
