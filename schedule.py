@@ -156,8 +156,8 @@ def setup_logger(name: str,
 
 def initializeList(nSkaters: int,
                    reqAppearances: int,
-                   optimalHeatSize: int,
-                   defaultValue: int = -1) -> list:
+                   optimalHeatSize: int) -> list:
+                #    defaultValue: int = -1) -> list:
     """Builds your initial Heat List, same as below, just returns a list of lists instead."""
     skaterList = list(range(nSkaters))*reqAppearances
     initList = []
@@ -174,9 +174,12 @@ def initializeList(nSkaters: int,
         #     heat.append(defaultValue)
         # initList.append(heat)
         otherHeats = list(range(len(initList)))
+        initListLen = len(initList)
+        otherHeatsLen = len(otherHeats)
         np.random.shuffle(otherHeats)
         for i, person in enumerate(heat):
-            initList[otherHeats[i]].append(person)
+            index = otherHeats[i % otherHeatsLen] % initListLen
+            initList[index].append(person)
 
     return initList
 
@@ -550,11 +553,12 @@ class raceProgram():
                 heatSize -= 1
                 if heatSize <= minHeatSize:
                     minHeatSize -= 1
+        self.numRacesToReachOverdetermined = int(np.rint(totalSkaters / (heatSize - 1)))
         self.ghostSkaterNums = set()
         self.winsportEventName = winsportEventName
         self.printWinsportHeats = printWinsportHeats
-        self.minimumUniqueEncountersPerSkater = numRacesPerSkater * \
-            (heatSize - 2)
+        self.minimumUniqueEncountersPerSkater = min(int(0.8*totalSkaters), numRacesPerSkater * \
+            (heatSize - 2))
         self.printDetailsPath = os.path.join(os.getcwd(), 'calculationDetails')
         if cleanCalculationDetails:
             self._cleanCalculationDetails()
@@ -613,6 +617,7 @@ class raceProgram():
         self.n_encounterErrors = 0
         self._runAveSeedingAndStdDev()
         self.currentHeatList = []
+        self._ghostParticipants = 0
 
     def _runAveSeedingAndStdDev(self):
         self.skaterNums = list(range(self.totalSkaters))
@@ -890,11 +895,6 @@ class raceProgram():
         skaterList = self.skaterNums
         assert len(splittingRules) == self.numRacesPerSkater * \
             len(skaterList) + 1, 'Wrong length for splittingRules.'
-        n_heats = int(np.rint(splittingRules[0]))
-        n_skaterList = self.numRacesPerSkater * len(skaterList)
-        heatSize = 1
-        while heatSize*n_heats < n_skaterList:
-            heatSize += 1
         allHeats = []
         subHeat = []
         sr = [int(np.rint(splittingRules[0]))]
@@ -927,7 +927,7 @@ class raceProgram():
                 continue
             else:
                 subHeat.append(skaterList[skater_])
-                if len(subHeat) >= heatSize:
+                if len(subHeat) >= self.heatSize:
                     allHeats.append(subHeat)
                     subHeat = []
                 else:
@@ -937,7 +937,7 @@ class raceProgram():
                 if clash not in subHeat:
                     subHeat.append(clash)
                     conflicts.pop(conflictsLen -j -1)
-                if len(subHeat) >= heatSize:
+                if len(subHeat) >= self.heatSize:
                     allHeats.append(subHeat)
                     subHeat = []
         subHeat += conflicts
@@ -1677,115 +1677,7 @@ class raceProgram():
                     heats = {}
                     usedHKs = []
                     # hsTol = 1
-            while True:
-                smallHeats = []
-                heatToDelete = []
-                smallHeatsCleared = True
-                for hk, heat_ in heats.items():
-                    heat = heat_['heat']
-                    if len(heat) < self.minHeatSize:
-                        for i, skater_ in enumerate(heat):
-                            self.skaterDict[skater_].removeHeatAppearance(hk)
-                        smallHeats += heat
-                        heatToDelete.append(hk)
-                        smallHeatsCleared = False
-                        del heats[hk]
-                        break # Delete only one heat at a time
-                # remap keys, the ordering is not necessarily sequential:
-                allHeatKeys = sorted(list(heats.keys()))
-                tempHeats = copy.copy(heats)
-                heats = {}
-                for i, key in enumerate(allHeatKeys):
-                    if i+min(allHeatKeys) != key:
-                        for skaterNum in tempHeats[key]['heat']:
-                            self.skaterDict[skaterNum].removeHeatAppearance(key)
-                            self.skaterDict[skaterNum].addHeatAppearance(
-                                i+min(allHeatKeys))
-                    heats[i+min(allHeatKeys)] = tempHeats[key]
-                initialHeatIds = []
-                for skater_ in self.skaterDict.values():
-                    skater_.removeAllEncounters()
-                for heatId, heat_ in heats.items():
-                    initialHeatIds.append(heatId)
-                    heat = heat_['heat']
-                    for skater_i in heat:
-                        for skater_j in heat:
-                            if skater_i == skater_j:
-                                continue
-                            self.skaterDict[skater_i].addEncounterFlexible(
-                                skater_j)
-                # if self.considerSeeding and n_attempts == 0:
-                #     recommendedSeeding = recommendedSeedingOrder(M, initialHeatIds)
-                #     oldDict = copy.copy(self.skaterDict)
-                #     seedDict = {}
-                #     seedsAsList = []
-                #     for skater_ in self.skaterDict.values():
-                #         seedsAsList.append(skater_.seed)
-                #         seedDict[skater_.seed] = skater_.skaterNum
-                #     skatersFromSeedList = [seedDict[x]
-                #                         for x in sorted(seedsAsList)]
-                #     for i, sk8num in enumerate(recommendedSeeding):
-                #         self.skaterDict[sk8num] = oldDict[skatersFromSeedList[i]]
-                #         self.skaterDict[sk8num].skaterNum = sk8num
-                #         self.skaterDict[sk8num].removeAllHeatAppearances()
-                #         self.skaterDict[sk8num].removeAllEncounters()
-                #     continue
-                maxEncounters = 0
-                for skater_ in self.skaterDict.values():
-                    if skater_.totalEncounters > maxEncounters:
-                        maxEncounters = skater_.totalEncounters
-                bestHeatForSkaterInSmallHeat = []
-                heatSizeOverhang = 1
-                n_skatersToReplace = len(smallHeats)
-                while len(bestHeatForSkaterInSmallHeat) < n_skatersToReplace:
-                    # if all((skater_.totalEncounters >= maxEncounters for skater_ in self.skaterDict.values())):
-                    #     maxEncounters += 1
-                    emplacedSkaters = []
-                    for skater_ in smallHeats:
-                        n_maxEncounters = np.iinfo(int).max
-                        bestHeat = None
-                        appearsInHeat = []
-                        for hk, heat_ in heats.items():
-                            heat = heat_['heat']
-                            if skater_ in heat:
-                                appearsInHeat.append(True)
-                                continue
-                            appearsInHeat.append(False)
-                            if len(heat) >= self.heatSize + heatSizeOverhang:
-                                continue
-                            if any((self.skaterDict[skater_x].totalEncounters >= maxEncounters for skater_x in heat)):
-                                continue
-                            n_enc = 0
-                            otherEncounters = 0
-                            for other in heat:
-                                if other in self.skaterDict[skater_].encounters:
-                                    n_enc += 1
-                                otherEncounters += self.skaterDict[other].totalEncounters
-                            n_enc = n_enc*otherEncounters
-                            if n_enc < n_maxEncounters:
-                                bestHeat = hk
-                                n_maxEncounters = n_enc
-                        if bestHeat is None:
-                            continue
-                        bestHeatForSkaterInSmallHeat.append(bestHeat)
-                        heat = heats[bestHeat]['heat']
-                        emplacedSkaters.append(skater_)
-                        heat.append(skater_)
-                        self.skaterDict[skater_].addHeatAppearance(bestHeat)
-                        for skater_i in heat:
-                            if skater_i == skater_:
-                                continue
-                            self.skaterDict[skater_i].addEncounterFlexible(skater_)
-                            self.skaterDict[skater_].addEncounterFlexible(skater_i)
-                    if len(emplacedSkaters) == 0:
-                        maxEncounters += 1
-                        assert maxEncounters < 1000, "SGP stuck in reorganisation loop"
-                        if heatSizeOverhang < 3:
-                            heatSizeOverhang += 1
-                    for skater_ in emplacedSkaters:
-                        smallHeats.remove(skater_)
-                if smallHeatsCleared:
-                    break
+            heats, initialHeatIds = self.reorganise_small_heats(heats)
             if self.considerSeeding and n_attempts == 0:
                 recommendedSeeding = recommendedSeedingOrder(M, initialHeatIds)
                 oldDict = copy.copy(self.skaterDict)
@@ -1888,6 +1780,102 @@ class raceProgram():
             return heats
         return {}
 
+    def reorganise_small_heats(self, heats):
+        while True:
+            smallHeats = []
+            heatToDelete = []
+            smallHeatsCleared = True
+            for hk, heat_ in heats.items():
+                heat = heat_['heat']
+                if len(heat) < self.minHeatSize:
+                    for i, skater_ in enumerate(heat):
+                        self.skaterDict[skater_].removeHeatAppearance(hk)
+                    smallHeats += heat
+                    heatToDelete.append(hk)
+                    smallHeatsCleared = False
+                    del heats[hk]
+                    break # Delete only one heat at a time
+                # remap keys, the ordering is not necessarily sequential:
+            allHeatKeys = sorted(list(heats.keys()))
+            tempHeats = copy.copy(heats)
+            heats = {}
+            for i, key in enumerate(allHeatKeys):
+                if i+min(allHeatKeys) != key:
+                    for skaterNum in tempHeats[key]['heat']:
+                        self.skaterDict[skaterNum].removeHeatAppearance(key)
+                        self.skaterDict[skaterNum].addHeatAppearance(
+                                i+min(allHeatKeys))
+                heats[i+min(allHeatKeys)] = tempHeats[key]
+            initialHeatIds = []
+            for skater_ in self.skaterDict.values():
+                skater_.removeAllEncounters()
+            for heatId, heat_ in heats.items():
+                initialHeatIds.append(heatId)
+                heat = heat_['heat']
+                for skater_i in heat:
+                    for skater_j in heat:
+                        if skater_i == skater_j:
+                            continue
+                        self.skaterDict[skater_i].addEncounterFlexible(
+                                skater_j)
+            maxEncounters = 0
+            for skater_ in self.skaterDict.values():
+                if skater_.totalEncounters > maxEncounters:
+                    maxEncounters = skater_.totalEncounters
+            bestHeatForSkaterInSmallHeat = []
+            heatSizeOverhang = 1
+            n_skatersToReplace = len(smallHeats)
+            while len(bestHeatForSkaterInSmallHeat) < n_skatersToReplace:
+                    # if all((skater_.totalEncounters >= maxEncounters for skater_ in self.skaterDict.values())):
+                    #     maxEncounters += 1
+                emplacedSkaters = []
+                for skater_ in smallHeats:
+                    n_maxEncounters = np.iinfo(int).max
+                    bestHeat = None
+                    appearsInHeat = []
+                    for hk, heat_ in heats.items():
+                        heat = heat_['heat']
+                        if skater_ in heat:
+                            appearsInHeat.append(True)
+                            continue
+                        appearsInHeat.append(False)
+                        if len(heat) >= self.heatSize + heatSizeOverhang:
+                            continue
+                        if any((self.skaterDict[skater_x].totalEncounters >= maxEncounters for skater_x in heat)):
+                            continue
+                        n_enc = 0
+                        otherEncounters = 0
+                        for other in heat:
+                            if other in self.skaterDict[skater_].encounters:
+                                n_enc += 1
+                            otherEncounters += self.skaterDict[other].totalEncounters
+                        n_enc = n_enc*otherEncounters
+                        if n_enc < n_maxEncounters:
+                            bestHeat = hk
+                            n_maxEncounters = n_enc
+                    if bestHeat is None:
+                        continue
+                    bestHeatForSkaterInSmallHeat.append(bestHeat)
+                    heat = heats[bestHeat]['heat']
+                    emplacedSkaters.append(skater_)
+                    heat.append(skater_)
+                    self.skaterDict[skater_].addHeatAppearance(bestHeat)
+                    for skater_i in heat:
+                        if skater_i == skater_:
+                            continue
+                        self.skaterDict[skater_i].addEncounterFlexible(skater_)
+                        self.skaterDict[skater_].addEncounterFlexible(skater_i)
+                if len(emplacedSkaters) == 0:
+                    maxEncounters += 1
+                    assert maxEncounters < 1000, "SGP stuck in reorganisation loop"
+                    if heatSizeOverhang < 3:
+                        heatSizeOverhang += 1
+                for skater_ in emplacedSkaters:
+                    smallHeats.remove(skater_)
+            if smallHeatsCleared:
+                break
+        return heats,initialHeatIds
+
     def _addGhostParticipants(self, remainder):
         highestKey = np.max(list(self.skaterDict.keys()))
         highestSeed = 0
@@ -1908,19 +1896,21 @@ class raceProgram():
                                              )
             self.skaterDict[highestKey + ng].isGhost = True
             self.ghostSkaterNums.add(highestKey + ng)
+            self._ghostParticipants += 1
         self.totalSkaters += remainder
         self._checkParticipants()
         self._runAveSeedingAndStdDev()
 
     def _minimize(self,
                   verbose: bool = True,
-                  max_attempts: int = 100) -> dict:
+                  max_attempts: int = 100,
+                  skipEncountersCheck: bool = False) -> dict:
         """ A more structured search for the optimal configuration """
 
         initM = initializeList(self.totalSkaters,
                                self.numRacesPerSkater,
-                               self.minHeatSize,
-                               self.initMatDefaultValue)
+                               self.minHeatSize)
+                            #    self.initMatDefaultValue)
 
         if max_attempts > 100:
             max_attempts = 100
@@ -1937,7 +1927,6 @@ class raceProgram():
         locNotDefault = [len(initM)]+locNotDefault
         initPot = self.heatPotentialCalcList(
             locNotDefault)
-
         conTests = convergenceTests(minHeatSize=self.minHeatSize,
                                     verbose=verbose,
                                     printDetails=self.printDetails,
@@ -1954,17 +1943,14 @@ class raceProgram():
         success = False
         for n_attempts_ in range(max_attempts):
             recalcBounds = False
-            if n_attempts_ > 0 and n_attempts_ % 10 == 0:
-                if verbose:
-                    print(f"Adding 1 ghost participant after {n_attempts_} attempts. New total skaters: {self.totalSkaters + 1}")
-                self._addGhostParticipants(1)
-                recalcBounds = True
+            if n_attempts_ > 0 and n_attempts_ % 4 == 0 and self.minHeatSize == conTests.minHeatSize:
+                conTests.minHeatSize = max(1, self.minHeatSize - 1)
             if n_attempts_ > 0:
                 # Give everything a new starting point.
                 initM = initializeList(self.totalSkaters,
                         self.numRacesPerSkater,
-                        self.heatSize,
-                        self.initMatDefaultValue)
+                        self.heatSize)
+                        # self.initMatDefaultValue)
                 locNotDefault = []
                 for sktr_ in list(chain(*initM)):
                     if sktr_ != self.initMatDefaultValue:
@@ -2011,39 +1997,44 @@ class raceProgram():
                     for skNum_0 in heatAsList[skIndex+1:]:
                         self.skaterDict[skNum].addEncounterFlexible(skNum_0)
                         self.skaterDict[skNum_0].addEncounterFlexible(skNum)
+            self.correct_appearance_errors(heatDict)
+            heatDict, _ = self.reorganise_small_heats(heatDict)
+            # tr = conTests.heatLengthTest(heatDict,
+            #                              n_attempts,
+            #                              logger=self.buildHeatsLogger,
+            #                              ghostSkaterList=list(self.ghostSkaterNums))
+            # if tr == 0:
+            #     for skater_ in self.skaterDict.values():
+            #         skater_.removeAllHeatAppearances()
+            #         skater_.removeAllEncounters()
+            #     continue
 
-            tr = conTests.heatLengthTest(heatDict,
-                                         n_attempts,
-                                         logger=self.buildHeatsLogger,
-                                         ghostSkaterList=list(self.ghostSkaterNums))
-            if tr == 0:
-                for skater_ in self.skaterDict.values():
-                    skater_.removeAllHeatAppearances()
-                    skater_.removeAllEncounters()
-                continue
-
-            tr, n_appearancesErrors = conTests.appearanceTest(n_appearancesErrors,
-                                                              self.skaterDict,
-                                                              n_attempts,
-                                                              logger=self.buildHeatsLogger)
-            if tr == 0:
-                for skater_ in self.skaterDict.values():
-                    skater_.removeAllHeatAppearances()
-                    skater_.removeAllEncounters()
-                continue
-            tr, n_encounterErrors = conTests.encounterTest(n_encounterErrors,
-                                                           shift,
-                                                           self.skaterDict,
-                                                           n_attempts,
-                                                           logger=self.buildHeatsLogger,
-                                                           minUniqueEncounters=self.minimumUniqueEncountersPerSkater)
-            self.n_encounterErrors = n_encounterErrors
-            if tr == 0:
-                shift += 1
-                for skater_ in self.skaterDict.values():
-                    skater_.removeAllHeatAppearances()
-                    skater_.removeAllEncounters()
-                continue
+            # tr, n_appearancesErrors = conTests.appearanceTest(n_appearancesErrors,
+            #                                                   self.skaterDict,
+            #                                                   n_attempts,
+            #                                                   logger=self.buildHeatsLogger)
+            # if tr == 0:
+            #     for skater_ in self.skaterDict.values():
+            #         skater_.removeAllHeatAppearances()
+            #         skater_.removeAllEncounters()
+            #     continue
+            if not skipEncountersCheck:
+                tr, n_encounterErrors = conTests.encounterTest(n_encounterErrors,
+                                                               shift,
+                                                               self.skaterDict,
+                                                               n_attempts,
+                                                               logger=self.buildHeatsLogger,
+                                                               minUniqueEncounters=self.minimumUniqueEncountersPerSkater)
+                self.n_encounterErrors = n_encounterErrors
+                if self.n_encounterErrors > 0 and self.n_encounterErrors % 5 == 0:
+                    self.minimumUniqueEncountersPerSkater -= 1
+                    self.minimumUniqueEncountersPerSkater = max(1, self.minimumUniqueEncountersPerSkater)
+                if tr == 0:
+                    shift += 1
+                    for skater_ in self.skaterDict.values():
+                        skater_.removeAllHeatAppearances()
+                        skater_.removeAllEncounters()
+                    continue
             if self.considerSeeding:
                 tr, n_seedingErrors = conTests.seedingTest(n_seedingErrors,
                                                            heatDict,
@@ -2064,6 +2055,34 @@ class raceProgram():
             return heatDict
         if heatDict is None or not success:
             return {}
+
+    def correct_appearance_errors(self, heatDict):
+        skipHeatList = []
+        for key, skater_ in self.skaterDict.items():
+            while skater_.totalAppearances > self.numRacesPerSkater:
+                heatToChange = skater_.heatAppearances[-1]
+                skater_.removeHeatAppearance(heatToChange)
+                heatDict[heatToChange]['heat'].remove(key)
+                for otherSkater in heatDict[heatToChange]['heat']:
+                    skater_.removeEncounterFlexible(otherSkater)
+                    self.skaterDict[otherSkater].removeEncounterFlexible(key)
+
+            if skater_.totalAppearances < self.numRacesPerSkater:
+                for heatNum, subDict in heatDict.items():
+                    if heatNum in skipHeatList:
+                        continue
+                    heatAsList = subDict['heat']
+                    if key in heatAsList:
+                        continue
+                    skipHeatList.append(heatNum)
+                    subDict['heat'].append(key)
+                    skater_.addHeatAppearance(heatNum)
+                    for skNum_0 in subDict['heat']:
+                        if skNum_0 == key:
+                            continue
+                        self.skaterDict[key].addEncounterFlexible(skNum_0)
+                        self.skaterDict[skNum_0].addEncounterFlexible(key)
+                    break
 
     def _getMinimizeBounds(self, initM: list, locNotDefault: list) -> list:
         maxHeats = len(list(chain(*initM)))//2

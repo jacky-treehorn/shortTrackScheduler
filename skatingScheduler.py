@@ -106,6 +106,8 @@ def yellowCardReset(raceProgram_: raceProgram,
 
 
 if __name__ == "__main__":
+    #TODO Get rid of any seeding stuff, it isn't compatible with a 1 vs. all
+    #TODO round robin system.
     debug = False
     gridTest = False
     argDict = {}
